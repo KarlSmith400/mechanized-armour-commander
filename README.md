@@ -141,13 +141,19 @@ See [mechanized-armour-commander-design.md](mechanized-armour-commander-design.m
 - **Clear feedback** - Player always knows why they won or lost
 - **Modular design** - Easy to expand content without code changes
 
-## Contributing
-
-This is currently a personal project. Feature suggestions and bug reports are welcome through the design document.
-
 ## License
 
-TBD
+**Proprietary Software - All Rights Reserved**
+
+Copyright © 2026. This software is proprietary and confidential. Unauthorized copying, distribution, modification, or use of this software, via any medium, is strictly prohibited without explicit written permission from the copyright holder.
+
+This code is provided for **viewing and portfolio purposes only**. No license is granted for any use whatsoever.
+
+See [LICENSE](LICENSE) file for complete terms.
+
+## Contact
+
+For licensing inquiries or permission requests, please contact the repository owner.
 
 ---
 
