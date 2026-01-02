@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet:*)",
+      "Bash(mkdir:*)",
+      "Bash(rm:*)",
+      "Bash(tree:*)",
+      "Bash(dir:*)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File \"rename-project.ps1\")",
+      "Bash(xargs rm -rf)",
+      "Bash(ls:*)",
+      "Bash(dotnet-script:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: Mechanized Armour Commander v0.1.0\n\nComplete combat prototype with advanced features:\n- SQLite database with 12 chassis and 13 weapons\n- Positional combat system with range-based accuracy\n- AI-driven combat with sophisticated target selection\n- Frame Selector UI for browsing and configuring frames\n- Tactical Mode for round-by-round player intervention\n- Terminal-style WPF interface\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+    ]
+  }
+}

@@ -1,0 +1,149 @@
+<Window x:Class="MechanizedArmourCommander.UI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:MechanizedArmourCommander.UI"
+        mc:Ignorable="d"
+        Title="Mechanized Armour Commander - Combat Prototype" Height="700" Width="1200"
+        Background="#1E1E1E">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <TextBlock Grid.Row="0"
+                   Text="MECHANIZED ARMOUR COMMANDER - COMBAT PROTOTYPE"
+                   FontSize="24"
+                   FontWeight="Bold"
+                   Foreground="#00FF00"
+                   HorizontalAlignment="Center"
+                   Margin="0,0,0,20"/>
+
+        <!-- Main Content -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="300"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Player Forces -->
+            <Border Grid.Column="0"
+                    BorderBrush="#00FF00"
+                    BorderThickness="2"
+                    Padding="10"
+                    Margin="0,0,10,0">
+                <StackPanel>
+                    <TextBlock Text="PLAYER FORCES"
+                               FontSize="16"
+                               FontWeight="Bold"
+                               Foreground="#00FF00"
+                               Margin="0,0,0,10"/>
+                    <ListBox x:Name="PlayerFramesList"
+                             Background="#2D2D2D"
+                             Foreground="White"
+                             BorderThickness="0"
+                             Height="300"/>
+
+                    <TextBlock Text="TACTICAL ORDERS"
+                               FontSize="14"
+                               FontWeight="Bold"
+                               Foreground="#00FF00"
+                               Margin="0,20,0,10"/>
+                    <CheckBox x:Name="TacticalModeCheckBox"
+                              Content="Tactical Mode (Round-by-round)"
+                              Foreground="#00FF00"
+                              Margin="0,0,0,10"/>
+                    <StackPanel x:Name="TacticalOrdersPanel">
+                        <!-- Will be populated programmatically -->
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Combat Feed -->
+            <Border Grid.Column="1"
+                    BorderBrush="#00FF00"
+                    BorderThickness="2"
+                    Padding="10">
+                <StackPanel>
+                    <TextBlock Text="COMBAT FEED"
+                               FontSize="16"
+                               FontWeight="Bold"
+                               Foreground="#00FF00"
+                               Margin="0,0,0,10"/>
+                    <ScrollViewer Height="500"
+                                  VerticalScrollBarVisibility="Auto">
+                        <TextBlock x:Name="CombatFeedText"
+                                   FontFamily="Consolas"
+                                   FontSize="12"
+                                   Foreground="#00FF00"
+                                   Background="#0D0D0D"
+                                   Padding="10"
+                                   TextWrapping="Wrap"/>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+
+            <!-- Enemy Forces -->
+            <Border Grid.Column="2"
+                    BorderBrush="#FF0000"
+                    BorderThickness="2"
+                    Padding="10"
+                    Margin="10,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="ENEMY FORCES"
+                               FontSize="16"
+                               FontWeight="Bold"
+                               Foreground="#FF0000"
+                               Margin="0,0,0,10"/>
+                    <ListBox x:Name="EnemyFramesList"
+                             Background="#2D2D2D"
+                             Foreground="White"
+                             BorderThickness="0"
+                             Height="300"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Controls -->
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Center"
+                    Margin="0,20,0,0">
+            <Button x:Name="FrameSelectorButton"
+                    Content="FRAME SELECTOR"
+                    Click="FrameSelectorButton_Click"
+                    Width="150"
+                    Height="40"
+                    FontSize="14"
+                    FontWeight="Bold"
+                    Background="#0088FF"
+                    Foreground="Black"
+                    Margin="5"/>
+            <Button x:Name="StartCombatButton"
+                    Content="START COMBAT"
+                    Click="StartCombatButton_Click"
+                    Width="150"
+                    Height="40"
+                    FontSize="14"
+                    FontWeight="Bold"
+                    Background="#00FF00"
+                    Foreground="Black"
+                    Margin="5"/>
+            <Button x:Name="ResetButton"
+                    Content="RESET"
+                    Click="ResetButton_Click"
+                    Width="150"
+                    Height="40"
+                    FontSize="14"
+                    FontWeight="Bold"
+                    Background="#FF8800"
+                    Foreground="Black"
+                    Margin="5"/>
+        </StackPanel>
+    </Grid>
+</Window>
