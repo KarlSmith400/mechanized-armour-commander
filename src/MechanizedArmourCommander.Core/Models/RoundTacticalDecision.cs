@@ -1,60 +1,39 @@
 namespace MechanizedArmourCommander.Core.Models;
 
 /// <summary>
-/// Tactical decisions that can be made at the start of each combat round
+/// Tactical decisions made at the start of each combat round (per-frame action orders)
 /// </summary>
 public class RoundTacticalDecision
 {
     /// <summary>
-    /// Override stance for this round only (null = use default orders)
+    /// Per-frame action orders (key: InstanceId)
     /// </summary>
-    public Stance? StanceOverride { get; set; }
-
-    /// <summary>
-    /// Override target priority for this round only
-    /// </summary>
-    public TargetPriority? TargetPriorityOverride { get; set; }
-
-    /// <summary>
-    /// Specific frame to focus fire on (by InstanceId)
-    /// </summary>
-    public int? FocusTargetId { get; set; }
+    public Dictionary<int, FrameActions> FrameOrders { get; set; } = new();
 
     /// <summary>
     /// Attempt to withdraw this round
     /// </summary>
     public bool AttemptWithdrawal { get; set; }
-
-    /// <summary>
-    /// Frame-specific commands (key: InstanceId, value: command)
-    /// </summary>
-    public Dictionary<int, FrameCommand> FrameCommands { get; set; } = new();
 }
 
 /// <summary>
-/// Commands for individual frames
+/// Planned actions for a single frame in a round
 /// </summary>
-public class FrameCommand
+public class FrameActions
 {
-    /// <summary>
-    /// Hold fire this round (conserve ammo/heat)
-    /// </summary>
-    public bool HoldFire { get; set; }
+    public List<PlannedAction> Actions { get; set; } = new();
+    public int? FocusTargetId { get; set; }
+}
 
-    /// <summary>
-    /// Focus on evasion this round (movement bonus, accuracy penalty)
-    /// </summary>
-    public bool Evasive { get; set; }
-
-    /// <summary>
-    /// All-out attack (accuracy bonus, evasion penalty)
-    /// </summary>
-    public bool AllOut { get; set; }
-
-    /// <summary>
-    /// Specific target for this frame
-    /// </summary>
-    public int? TargetId { get; set; }
+/// <summary>
+/// A single planned action for a frame
+/// </summary>
+public class PlannedAction
+{
+    public CombatAction Action { get; set; }
+    public int? WeaponGroupId { get; set; }            // For FireGroup action
+    public HitLocation? CalledShotLocation { get; set; } // For CalledShot action
+    public MovementDirection? MoveDirection { get; set; } // For Move/Sprint action
 }
 
 /// <summary>
@@ -66,8 +45,7 @@ public class RoundSituation
     public List<FrameSituation> PlayerFrames { get; set; } = new();
     public List<FrameSituation> EnemyFrames { get; set; } = new();
     public string LastRoundSummary { get; set; } = string.Empty;
-    public int AverageDistance { get; set; }
-    public string RangeBand { get; set; } = string.Empty;
+    public RangeBand CurrentRangeBand { get; set; }
     public int PlayerLosses { get; set; }
     public int EnemyLosses { get; set; }
 }
@@ -80,27 +58,71 @@ public class FrameSituation
     public int InstanceId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Class { get; set; } = string.Empty;
-    public int CurrentArmor { get; set; }
-    public int MaxArmor { get; set; }
-    public float ArmorPercent => MaxArmor > 0 ? (float)CurrentArmor / MaxArmor * 100 : 0;
-    public int CurrentHeat { get; set; }
-    public int MaxHeat { get; set; }
-    public float HeatPercent => MaxHeat > 0 ? (float)CurrentHeat / MaxHeat * 100 : 0;
-    public int CurrentAmmo { get; set; }
-    public int MaxAmmo { get; set; }
-    public int Position { get; set; }
+
+    // Per-location armor status
+    public Dictionary<HitLocation, int> Armor { get; set; } = new();
+    public Dictionary<HitLocation, int> MaxArmor { get; set; } = new();
+    public Dictionary<HitLocation, int> Structure { get; set; } = new();
+    public Dictionary<HitLocation, int> MaxStructure { get; set; } = new();
+    public HashSet<HitLocation> DestroyedLocations { get; set; } = new();
+
+    // Reactor status
+    public int ReactorOutput { get; set; }
+    public int CurrentEnergy { get; set; }
+    public int ReactorStress { get; set; }
+    public int MovementEnergyCost { get; set; }
+
+    // Action points
+    public int ActionPoints { get; set; }
+
+    // Range
+    public RangeBand CurrentRange { get; set; }
+
+    // Weapon groups with status
+    public Dictionary<int, List<WeaponGroupInfo>> WeaponGroups { get; set; } = new();
+
+    // Ammo
+    public Dictionary<string, int> AmmoByType { get; set; } = new();
+
+    // Component damage
+    public List<ComponentDamage> DamagedComponents { get; set; } = new();
+
+    // State
     public bool IsDestroyed { get; set; }
-    public bool IsOverheating { get; set; }
-    public bool IsLowAmmo => CurrentAmmo < 20;
+    public bool IsShutDown { get; set; }
+
+    public float ArmorPercent
+    {
+        get
+        {
+            int total = MaxArmor.Values.Sum();
+            return total > 0 ? (float)Armor.Values.Sum() / total * 100 : 0;
+        }
+    }
+
     public string Status
     {
         get
         {
             if (IsDestroyed) return "DESTROYED";
-            if (IsOverheating) return "OVERHEATING";
+            if (IsShutDown) return "SHUTDOWN";
             if (ArmorPercent < 25) return "CRITICAL";
             if (ArmorPercent < 50) return "DAMAGED";
             return "OPERATIONAL";
         }
     }
+}
+
+/// <summary>
+/// Summary info for a weapon in a group (for UI display)
+/// </summary>
+public class WeaponGroupInfo
+{
+    public string Name { get; set; } = string.Empty;
+    public string WeaponType { get; set; } = string.Empty;
+    public int EnergyCost { get; set; }
+    public int AmmoPerShot { get; set; }
+    public int Damage { get; set; }
+    public string RangeClass { get; set; } = string.Empty;
+    public bool IsDestroyed { get; set; }
 }

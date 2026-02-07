@@ -3,112 +3,279 @@ using MechanizedArmourCommander.Core.Models;
 namespace MechanizedArmourCommander.Core.Combat;
 
 /// <summary>
-/// AI decision-making system for auto-resolved combat
+/// AI decision-making system for combat frame actions
 /// </summary>
 public class CombatAI
 {
     private readonly Random _random = new();
+    private readonly PositioningSystem _positioning = new();
+    private readonly ReactorSystem _reactor = new();
 
     /// <summary>
-    /// Selects the best target based on tactical orders and combat situation
+    /// Generates AI actions for a frame based on tactical orders and combat state
     /// </summary>
-    public CombatFrame SelectTarget(
-        CombatFrame attacker,
-        List<CombatFrame> availableTargets,
-        TargetPriority priority)
+    public FrameActions GenerateActions(CombatFrame frame, List<CombatFrame> enemies,
+        TacticalOrders orders, ActionSystem actionSystem)
     {
-        if (!availableTargets.Any())
+        var actions = new FrameActions();
+
+        if (frame.IsDestroyed || frame.IsShutDown)
+            return actions;
+
+        var activeEnemies = enemies.Where(e => !e.IsDestroyed).ToList();
+        if (!activeEnemies.Any())
+            return actions;
+
+        // Select target
+        var target = SelectTarget(frame, activeEnemies, orders.TargetPriority);
+        actions.FocusTargetId = target.InstanceId;
+
+        // Determine optimal range for this frame's loadout
+        var optimalRange = DetermineOptimalRange(frame, orders);
+
+        // Decide actions based on stance and situation
+        switch (orders.Stance)
+        {
+            case Stance.Aggressive:
+                PlanAggressiveActions(frame, actions, optimalRange, actionSystem);
+                break;
+            case Stance.Defensive:
+                PlanDefensiveActions(frame, actions, optimalRange, actionSystem);
+                break;
+            default:
+                PlanBalancedActions(frame, actions, optimalRange, actionSystem);
+                break;
+        }
+
+        return actions;
+    }
+
+    private void PlanAggressiveActions(CombatFrame frame, FrameActions actions,
+        RangeBand optimalRange, ActionSystem actionSystem)
+    {
+        // Plan based on MaxActionPoints (AP will be refreshed before execution)
+        int availableAP = frame.MaxActionPoints;
+
+        // Aggressive: close to optimal range, then fire everything possible
+        if (frame.CurrentRange > optimalRange && availableAP >= 1
+            && !frame.DestroyedLocations.Contains(HitLocation.Legs))
+        {
+            actions.Actions.Add(new PlannedAction
+            {
+                Action = CombatAction.Move,
+                MoveDirection = MovementDirection.Close
+            });
+            availableAP--;
+        }
+
+        // Fire weapon groups with remaining AP
+        FillRemainingAPWithFire(frame, actions, ref availableAP);
+    }
+
+    private void PlanDefensiveActions(CombatFrame frame, FrameActions actions,
+        RangeBand optimalRange, ActionSystem actionSystem)
+    {
+        int availableAP = frame.MaxActionPoints;
+
+        // Defensive: brace if damaged, pull back if too close, conserve energy
+        bool heavilyDamaged = frame.ArmorPercent < 40;
+
+        if (heavilyDamaged && availableAP >= 1)
+        {
+            actions.Actions.Add(new PlannedAction { Action = CombatAction.Brace });
+            availableAP--;
+        }
+        else if (frame.CurrentRange < optimalRange && availableAP >= 1
+            && !frame.DestroyedLocations.Contains(HitLocation.Legs))
+        {
+            actions.Actions.Add(new PlannedAction
+            {
+                Action = CombatAction.Move,
+                MoveDirection = MovementDirection.PullBack
+            });
+            availableAP--;
+        }
+
+        // Vent reactor if stressed
+        if (frame.ReactorStress > frame.EffectiveReactorOutput / 2
+            && availableAP >= 1)
+        {
+            actions.Actions.Add(new PlannedAction { Action = CombatAction.VentReactor });
+            availableAP--;
+        }
+
+        // Fire weapon groups with remaining AP
+        FillRemainingAPWithFire(frame, actions, ref availableAP);
+    }
+
+    private void PlanBalancedActions(CombatFrame frame, FrameActions actions,
+        RangeBand optimalRange, ActionSystem actionSystem)
+    {
+        int availableAP = frame.MaxActionPoints;
+
+        // Balanced: move toward optimal range if needed, then fire
+        bool needsToMove = frame.CurrentRange != optimalRange
+            && !frame.DestroyedLocations.Contains(HitLocation.Legs);
+
+        // Vent if reactor stress is getting dangerous
+        if (frame.ReactorStress >= frame.EffectiveReactorOutput * 0.75)
+        {
+            actions.Actions.Add(new PlannedAction { Action = CombatAction.VentReactor });
+            availableAP--;
+        }
+        else if (needsToMove && availableAP >= 1)
+        {
+            var direction = frame.CurrentRange > optimalRange
+                ? MovementDirection.Close
+                : MovementDirection.PullBack;
+
+            actions.Actions.Add(new PlannedAction
+            {
+                Action = CombatAction.Move,
+                MoveDirection = direction
+            });
+            availableAP--;
+        }
+
+        // Fire weapon groups with remaining AP
+        FillRemainingAPWithFire(frame, actions, ref availableAP);
+    }
+
+    /// <summary>
+    /// Fills remaining AP slots with fire actions, choosing different weapon groups
+    /// to maximize damage output across the round
+    /// </summary>
+    private void FillRemainingAPWithFire(CombatFrame frame, FrameActions actions, ref int availableAP)
+    {
+        var usedGroups = new HashSet<int>();
+
+        while (availableAP >= 1)
+        {
+            var bestGroup = SelectBestWeaponGroup(frame, usedGroups);
+            if (bestGroup < 0) break;
+
+            actions.Actions.Add(new PlannedAction
+            {
+                Action = CombatAction.FireGroup,
+                WeaponGroupId = bestGroup
+            });
+            usedGroups.Add(bestGroup);
+            availableAP--;
+        }
+    }
+
+    /// <summary>
+    /// Selects the best weapon group to fire based on energy cost and expected damage.
+    /// Excludes groups already used this round to avoid double-firing the same group.
+    /// </summary>
+    private int SelectBestWeaponGroup(CombatFrame frame, HashSet<int>? excludeGroups = null)
+    {
+        int bestGroup = -1;
+        float bestScore = -1;
+
+        foreach (var (groupId, weapons) in frame.WeaponGroups)
+        {
+            if (excludeGroups != null && excludeGroups.Contains(groupId)) continue;
+
+            var functionalWeapons = weapons.Where(w => !w.IsDestroyed).ToList();
+            if (!functionalWeapons.Any()) continue;
+
+            int totalDamage = functionalWeapons.Sum(w => w.Damage);
+            int totalEnergyCost = functionalWeapons.Sum(w => w.EnergyCost);
+            bool hasAmmo = functionalWeapons.All(w =>
+                w.AmmoPerShot == 0 || frame.AmmoByType.GetValueOrDefault(w.AmmoType, 0) >= w.AmmoPerShot);
+
+            if (!hasAmmo) continue;
+
+            // Score: damage per energy, with a baseline for ammo weapons (which cost no energy)
+            float score = totalEnergyCost > 0 ? (float)totalDamage / totalEnergyCost : totalDamage * 2;
+
+            // Bonus for range-appropriate weapons
+            foreach (var weapon in functionalWeapons)
+            {
+                int rangeBonus = _positioning.GetRangeAccuracyModifier(weapon, frame.CurrentRange);
+                score += rangeBonus * 0.5f;
+            }
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestGroup = groupId;
+            }
+        }
+
+        return bestGroup;
+    }
+
+    /// <summary>
+    /// Selects the best target based on priority
+    /// </summary>
+    public CombatFrame SelectTarget(CombatFrame attacker, List<CombatFrame> targets, TargetPriority priority)
+    {
+        if (!targets.Any())
             throw new InvalidOperationException("No targets available");
 
         return priority switch
         {
-            TargetPriority.FocusFire => SelectFocusFireTarget(attacker, availableTargets),
-            TargetPriority.SpreadDamage => SelectSpreadDamageTarget(attacker, availableTargets),
-            TargetPriority.ThreatPriority => SelectThreatPriorityTarget(attacker, availableTargets),
-            TargetPriority.Opportunity => SelectOpportunityTarget(attacker, availableTargets),
-            _ => availableTargets.First()
+            TargetPriority.FocusFire => SelectFocusFireTarget(targets),
+            TargetPriority.SpreadDamage => SelectSpreadDamageTarget(targets),
+            TargetPriority.ThreatPriority => SelectThreatPriorityTarget(targets),
+            TargetPriority.Opportunity => SelectOpportunityTarget(attacker, targets),
+            _ => targets.First()
         };
     }
 
     /// <summary>
-    /// Determines optimal range based on stance and weapon loadout
+    /// Determines optimal range band based on weapon loadout
     /// </summary>
-    public string DetermineOptimalRange(CombatFrame frame, TacticalOrders orders)
+    public RangeBand DetermineOptimalRange(CombatFrame frame, TacticalOrders orders)
     {
-        // Analyze weapons to determine preferred range
-        var rangeScores = new Dictionary<string, int>
+        var rangeScores = new Dictionary<RangeBand, int>
         {
-            { "Short", 0 },
-            { "Medium", 0 },
-            { "Long", 0 }
+            { RangeBand.Short, 0 },
+            { RangeBand.Medium, 0 },
+            { RangeBand.Long, 0 }
         };
 
-        foreach (var weapon in frame.Weapons)
+        foreach (var weapon in frame.FunctionalWeapons)
         {
-            rangeScores[weapon.RangeClass] += weapon.Damage;
+            var band = weapon.RangeClass switch
+            {
+                "Short" => RangeBand.Short,
+                "Medium" => RangeBand.Medium,
+                "Long" => RangeBand.Long,
+                _ => RangeBand.Medium
+            };
+            rangeScores[band] += weapon.Damage;
         }
 
-        var preferredRange = rangeScores.OrderByDescending(kvp => kvp.Value).First().Key;
+        var preferred = rangeScores.OrderByDescending(kvp => kvp.Value).First().Key;
 
-        // Modify based on stance
+        // Stance shifts the preference
         return orders.Stance switch
         {
-            Stance.Aggressive => ShiftRangeCloser(preferredRange),
-            Stance.Defensive => ShiftRangeFarther(preferredRange),
-            _ => preferredRange
+            Stance.Aggressive when preferred > RangeBand.PointBlank =>
+                (RangeBand)((int)preferred - 1),
+            Stance.Defensive when preferred < RangeBand.Long =>
+                (RangeBand)((int)preferred + 1),
+            _ => preferred
         };
     }
 
     /// <summary>
-    /// Calculates movement modifier based on stance and situation
+    /// Determines if forces should withdraw based on threshold
     /// </summary>
-    public int CalculateMovementModifier(CombatFrame frame, TacticalOrders orders, List<CombatFrame> enemies)
-    {
-        int modifier = 0;
-
-        // Base movement on stance
-        modifier += orders.Stance switch
-        {
-            Stance.Aggressive => frame.Speed / 2,  // Move quickly to close
-            Stance.Defensive => frame.Speed / 3,   // Move cautiously
-            _ => frame.Speed / 4                    // Balanced movement
-        };
-
-        // Adjust based on frame condition
-        float armorPercent = (float)frame.CurrentArmor / frame.MaxArmor;
-        if (armorPercent < 0.3f && orders.Stance != Stance.Aggressive)
-        {
-            modifier += 2; // Move more when damaged to avoid hits
-        }
-
-        // Adjust based on formation
-        modifier += orders.Formation switch
-        {
-            Formation.Spread => 1,      // Spread out increases evasion
-            Formation.Flanking => 2,    // Flanking requires more movement
-            _ => 0
-        };
-
-        return modifier;
-    }
-
-    /// <summary>
-    /// Determines if unit should attempt to withdraw based on tactical orders
-    /// </summary>
-    public bool ShouldWithdraw(
-        List<CombatFrame> friendlyFrames,
-        WithdrawalThreshold threshold)
+    public bool ShouldWithdraw(List<CombatFrame> friendlyFrames, WithdrawalThreshold threshold)
     {
         if (threshold == WithdrawalThreshold.FightToEnd)
             return false;
 
-        var totalFriendlyFrames = friendlyFrames.Count;
-        var activeFriendlyFrames = friendlyFrames.Count(f => !f.IsDestroyed);
-        var damagedFrames = friendlyFrames.Count(f => !f.IsDestroyed &&
-            (float)f.CurrentArmor / f.MaxArmor < 0.5f);
+        var totalFrames = friendlyFrames.Count;
+        var activeFrames = friendlyFrames.Count(f => !f.IsDestroyed);
+        var damagedFrames = friendlyFrames.Count(f => !f.IsDestroyed && f.ArmorPercent < 50);
 
-        float lossRatio = 1.0f - ((float)activeFriendlyFrames / totalFriendlyFrames);
-        float damageRatio = (float)damagedFrames / Math.Max(activeFriendlyFrames, 1);
+        float lossRatio = 1.0f - ((float)activeFrames / totalFrames);
+        float damageRatio = (float)damagedFrames / Math.Max(activeFrames, 1);
 
         return threshold switch
         {
@@ -118,99 +285,36 @@ public class CombatAI
         };
     }
 
-    /// <summary>
-    /// Calculates weapon priority score for target selection
-    /// </summary>
-    public int CalculateWeaponEffectiveness(EquippedWeapon weapon, CombatFrame target, string currentRange)
+    #region Target Selection
+
+    private CombatFrame SelectFocusFireTarget(List<CombatFrame> targets)
     {
-        int score = weapon.Damage;
-
-        // Bonus for optimal range
-        if (weapon.RangeClass == currentRange)
-            score = (int)(score * 1.5f);
-
-        // Heat weapons less valuable against overheated targets
-        if (weapon.HeatGeneration > 5 && target.IsOverheating)
-            score = (int)(score * 0.7f);
-
-        // Ammo weapons less valuable when low on ammo
-        if (weapon.AmmoConsumption > 0)
-        {
-            // Estimate remaining shots (simplified)
-            score = (int)(score * 0.9f);
-        }
-
-        return score;
-    }
-
-    /// <summary>
-    /// Determines positioning based on formation orders
-    /// </summary>
-    public string DeterminePosition(
-        CombatFrame frame,
-        List<CombatFrame> friendlyFrames,
-        List<CombatFrame> enemyFrames,
-        TacticalOrders orders)
-    {
-        return orders.Formation switch
-        {
-            Formation.Tight => "Center formation",
-            Formation.Spread => frame.Class == "Light" ? "Flanking position" : "Dispersed line",
-            Formation.Flanking => DetermineFlanking(frame, friendlyFrames),
-            _ => "Standard position"
-        };
-    }
-
-    #region Target Selection Methods
-
-    private CombatFrame SelectFocusFireTarget(CombatFrame attacker, List<CombatFrame> targets)
-    {
-        // Focus fire: pick the most damaged enemy that's still dangerous
-        var mostDamaged = targets
-            .OrderBy(t => t.CurrentArmor)
-            .ThenByDescending(t => t.MaxArmor) // Prefer finishing off bigger threats
+        // Pick the most damaged enemy that's still a threat
+        return targets
+            .OrderBy(t => t.TotalArmorRemaining)
+            .ThenByDescending(t => t.TotalArmorMax)
             .First();
-
-        return mostDamaged;
     }
 
-    private CombatFrame SelectSpreadDamageTarget(CombatFrame attacker, List<CombatFrame> targets)
+    private CombatFrame SelectSpreadDamageTarget(List<CombatFrame> targets)
     {
-        // Spread damage: try to engage different targets
-        // Pick the target with the most remaining armor (least damaged)
-        return targets.OrderByDescending(t => (float)t.CurrentArmor / t.MaxArmor).First();
+        // Engage the least damaged target
+        return targets.OrderByDescending(t => t.ArmorPercent).First();
     }
 
-    private CombatFrame SelectThreatPriorityTarget(CombatFrame attacker, List<CombatFrame> targets)
+    private CombatFrame SelectThreatPriorityTarget(List<CombatFrame> targets)
     {
-        // Calculate threat score for each target
-        var targetScores = targets.Select(t => new
-        {
-            Target = t,
-            ThreatScore = CalculateThreatScore(t)
-        }).OrderByDescending(x => x.ThreatScore);
-
-        return targetScores.First().Target;
+        return targets.OrderByDescending(t => CalculateThreatScore(t)).First();
     }
 
     private CombatFrame SelectOpportunityTarget(CombatFrame attacker, List<CombatFrame> targets)
     {
-        // Opportunity: finish off weakened targets
-        var targetScores = targets.Select(t => new
-        {
-            Target = t,
-            OpportunityScore = CalculateOpportunityScore(t, attacker)
-        }).OrderByDescending(x => x.OpportunityScore);
-
-        return targetScores.First().Target;
+        return targets.OrderByDescending(t => CalculateOpportunityScore(t, attacker)).First();
     }
 
     private int CalculateThreatScore(CombatFrame target)
     {
-        int score = 0;
-
-        // Heavier frames are bigger threats
-        score += target.Class switch
+        int score = target.Class switch
         {
             "Assault" => 40,
             "Heavy" => 30,
@@ -219,68 +323,24 @@ public class CombatAI
             _ => 0
         };
 
-        // More armor = more threat
-        score += target.CurrentArmor / 10;
-
-        // Weapon firepower
-        score += target.Weapons.Sum(w => w.Damage);
-
+        score += target.TotalArmorRemaining / 10;
+        score += target.FunctionalWeapons.Sum(w => w.Damage);
         return score;
     }
 
     private int CalculateOpportunityScore(CombatFrame target, CombatFrame attacker)
     {
-        int score = 0;
+        int score = (int)((1.0f - target.ArmorPercent / 100f) * 100);
 
-        // Lower armor = better opportunity
-        float armorPercent = (float)target.CurrentArmor / target.MaxArmor;
-        score += (int)((1.0f - armorPercent) * 100);
+        // Bonus if we can likely destroy a location
+        int totalDamage = attacker.FunctionalWeapons.Sum(w => w.Damage);
+        if (totalDamage >= target.TotalArmorRemaining)
+            score += 50;
 
-        // Can we one-shot it?
-        int totalDamage = attacker.Weapons.Sum(w => w.Damage);
-        if (totalDamage >= target.CurrentArmor)
-        {
-            score += 50; // Big bonus for potential kill
-        }
-
-        // Overheated targets are easier
-        if (target.IsOverheating)
-            score += 20;
+        if (target.IsShutDown)
+            score += 30;
 
         return score;
-    }
-
-    #endregion
-
-    #region Helper Methods
-
-    private string ShiftRangeCloser(string currentRange)
-    {
-        return currentRange switch
-        {
-            "Long" => "Medium",
-            "Medium" => "Short",
-            _ => currentRange
-        };
-    }
-
-    private string ShiftRangeFarther(string currentRange)
-    {
-        return currentRange switch
-        {
-            "Short" => "Medium",
-            "Medium" => "Long",
-            _ => currentRange
-        };
-    }
-
-    private string DetermineFlanking(CombatFrame frame, List<CombatFrame> friendlyFrames)
-    {
-        // Light frames flank, heavy frames center
-        if (frame.Class == "Light" || frame.Class == "Medium")
-            return "Flanking maneuver";
-        else
-            return "Center support";
     }
 
     #endregion

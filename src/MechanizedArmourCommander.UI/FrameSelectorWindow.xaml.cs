@@ -32,14 +32,10 @@ public partial class FrameSelectorWindow : Window
 
     private void LoadData()
     {
-        // Load all chassis and weapons
         _allChassis = _chassisRepo.GetAll();
         _allWeapons = _weaponRepo.GetAll();
 
-        // Populate chassis list
         RefreshChassisList("All Classes");
-
-        // Populate weapons list
         RefreshWeaponsList();
     }
 
@@ -63,13 +59,23 @@ public partial class FrameSelectorWindow : Window
 
         foreach (var weapon in _allWeapons.OrderBy(w => w.HardpointSize).ThenBy(w => w.Name))
         {
-            WeaponsListBox.Items.Add($"[{weapon.HardpointSize}] {weapon.Name} - {weapon.Damage}dmg {weapon.RangeClass}");
+            string typeTag = weapon.WeaponType switch
+            {
+                "Energy" => "E",
+                "Ballistic" => "B",
+                "Missile" => "M",
+                _ => "?"
+            };
+            string energyInfo = weapon.EnergyCost > 0 ? $"{weapon.EnergyCost}E" : "";
+            string ammoInfo = weapon.AmmoPerShot > 0 ? $"{weapon.AmmoPerShot}ammo" : "";
+            string costInfo = string.Join("/", new[] { energyInfo, ammoInfo }.Where(s => s.Length > 0));
+
+            WeaponsListBox.Items.Add($"[{weapon.HardpointSize}][{typeTag}] {weapon.Name} - {weapon.Damage}dmg {weapon.RangeClass} ({costInfo}) {weapon.SpaceCost}sp");
         }
     }
 
     private void ClassFilterComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        // Avoid running during initialization before controls are loaded
         if (ChassisListBox == null || ClassFilterComboBox.SelectedItem is not ComboBoxItem item)
             return;
 
@@ -80,7 +86,6 @@ public partial class FrameSelectorWindow : Window
     {
         if (ChassisListBox.SelectedItem is string selection)
         {
-            // Extract designation from selection
             var designation = selection.Split(' ')[0];
             _selectedChassis = _allChassis.FirstOrDefault(c => c.Designation == designation);
 
@@ -96,37 +101,47 @@ public partial class FrameSelectorWindow : Window
 
     private void DisplayChassisDetails(Chassis chassis)
     {
-        var details = $@"═══════════════════════════════════════
+        var details = $@"=======================================
 
 DESIGNATION: {chassis.Designation}
 NAME: {chassis.Name}
 CLASS: {chassis.Class}
 
-═══════════════════════════════════════
+=======================================
 SPECIFICATIONS
-═══════════════════════════════════════
+=======================================
 
 HARDPOINTS:
   Small:  {chassis.HardpointSmall}
   Medium: {chassis.HardpointMedium}
   Large:  {chassis.HardpointLarge}
 
-CAPACITIES:
-  Heat Capacity:  {chassis.HeatCapacity}
-  Ammo Capacity:  {chassis.AmmoCapacity}
-  Armor Points:   {chassis.ArmorPoints}
+REACTOR & MOVEMENT:
+  Reactor Output:     {chassis.ReactorOutput}
+  Movement Cost:      {chassis.MovementEnergyCost}E/band
+
+SPACE & ARMOR:
+  Total Space:        {chassis.TotalSpace}
+  Max Armor Total:    {chassis.MaxArmorTotal}
+
+STRUCTURE:
+  Head:               {chassis.StructureHead}
+  Center Torso:       {chassis.StructureCenterTorso}
+  Side Torso:         {chassis.StructureSideTorso}
+  Arms:               {chassis.StructureArm}
+  Legs:               {chassis.StructureLegs}
 
 PERFORMANCE:
-  Base Speed:     {chassis.BaseSpeed}
-  Base Evasion:   {chassis.BaseEvasion}
+  Base Speed:         {chassis.BaseSpeed}
+  Base Evasion:       {chassis.BaseEvasion}
 
-═══════════════════════════════════════
+=======================================
 TACTICAL ASSESSMENT
-═══════════════════════════════════════
+=======================================
 
 {GetTacticalAssessment(chassis)}
 
-═══════════════════════════════════════";
+=======================================";
 
         ChassisDetailsText.Text = details;
     }
@@ -135,31 +150,33 @@ TACTICAL ASSESSMENT
     {
         var assessment = "";
 
-        // Class-based assessment
         assessment += chassis.Class switch
         {
-            "Light" => "Role: Scout, Fast Attack\nStrengths: High speed, good evasion\nWeaknesses: Low armor, limited firepower\n",
-            "Medium" => "Role: Versatile Combatant\nStrengths: Balanced capabilities\nWeaknesses: Jack of all trades\n",
-            "Heavy" => "Role: Main Battle Frame\nStrengths: Heavy armor, strong firepower\nWeaknesses: Slower movement\n",
-            "Assault" => "Role: Heavy Assault\nStrengths: Maximum armor and firepower\nWeaknesses: Slow speed, low evasion\n",
+            "Light" => "Role: Scout, Fast Attack\nStrengths: Low move cost, high evasion\nWeaknesses: Low structure, small reactor\n",
+            "Medium" => "Role: Versatile Combatant\nStrengths: Balanced reactor/mobility\nWeaknesses: Jack of all trades\n",
+            "Heavy" => "Role: Main Battle Frame\nStrengths: Large reactor, strong structure\nWeaknesses: High movement cost\n",
+            "Assault" => "Role: Heavy Assault\nStrengths: Maximum reactor and firepower\nWeaknesses: Very high move cost, low evasion\n",
             _ => ""
         };
 
-        // Hardpoint analysis
         var totalHardpoints = chassis.HardpointSmall + chassis.HardpointMedium + chassis.HardpointLarge;
         assessment += $"\nTotal Hardpoints: {totalHardpoints}\n";
 
         if (chassis.HardpointLarge > 0)
             assessment += "Can mount heavy weapons\n";
 
-        // Heat/Ammo ratio
-        var heatAmmoRatio = (float)chassis.HeatCapacity / chassis.AmmoCapacity;
-        if (heatAmmoRatio > 1.5f)
-            assessment += "Favors energy weapons\n";
-        else if (heatAmmoRatio < 0.7f)
-            assessment += "Favors ballistic weapons\n";
+        // Energy budget analysis
+        int energyAfterMove = chassis.ReactorOutput - chassis.MovementEnergyCost;
+        assessment += $"\nEnergy after one move: {energyAfterMove}E\n";
+
+        if (energyAfterMove > 15)
+            assessment += "Excellent energy surplus for weapons\n";
+        else if (energyAfterMove > 8)
+            assessment += "Good energy for mixed loadouts\n";
+        else if (energyAfterMove > 3)
+            assessment += "Tight energy budget - consider ballistics\n";
         else
-            assessment += "Balanced for mixed loadouts\n";
+            assessment += "Very tight energy - rely on ammo weapons\n";
 
         return assessment;
     }
@@ -168,6 +185,18 @@ TACTICAL ASSESSMENT
     {
         LoadoutPanel.Children.Clear();
         _selectedLoadout.Clear();
+
+        // Show space budget
+        var spaceBudgetText = new TextBlock
+        {
+            Text = $"Space Budget: 0/{chassis.TotalSpace} used",
+            Foreground = System.Windows.Media.Brushes.LimeGreen,
+            FontSize = 11,
+            FontWeight = FontWeights.Bold,
+            Margin = new Thickness(0, 0, 0, 10),
+            Tag = "SpaceBudget"
+        };
+        LoadoutPanel.Children.Add(spaceBudgetText);
 
         var slots = new List<(string Size, int Count)>
         {
@@ -201,17 +230,16 @@ TACTICAL ASSESSMENT
                     Tag = slotKey
                 };
 
-                // Add empty option
                 weaponCombo.Items.Add("(Empty)");
 
-                // Add weapons matching this hardpoint size
                 var matchingWeapons = _allWeapons
                     .Where(w => w.HardpointSize == size)
                     .OrderBy(w => w.Name);
 
                 foreach (var weapon in matchingWeapons)
                 {
-                    weaponCombo.Items.Add($"{weapon.Name} ({weapon.Damage}dmg, {weapon.RangeClass})");
+                    string typeTag = weapon.WeaponType == "Energy" ? "E" : weapon.WeaponType == "Ballistic" ? "B" : "M";
+                    weaponCombo.Items.Add($"{weapon.Name} ({weapon.Damage}dmg, {weapon.RangeClass}, {typeTag}, {weapon.SpaceCost}sp)");
                 }
 
                 weaponCombo.SelectedIndex = 0;
@@ -231,7 +259,6 @@ TACTICAL ASSESSMENT
         {
             if (combo.SelectedItem is string selection && selection != "(Empty)")
             {
-                // Extract weapon name from selection
                 var weaponName = selection.Split('(')[0].Trim();
                 var weapon = _allWeapons.FirstOrDefault(w => w.Name == weaponName);
                 _selectedLoadout[slotKey] = weapon;
@@ -242,6 +269,29 @@ TACTICAL ASSESSMENT
             }
 
             UpdateSelectedFrameText();
+            UpdateSpaceBudget();
+        }
+    }
+
+    private void UpdateSpaceBudget()
+    {
+        if (_selectedChassis == null) return;
+
+        int usedSpace = _selectedLoadout.Values
+            .Where(w => w != null)
+            .Sum(w => w!.SpaceCost);
+
+        // Find the space budget text block
+        foreach (var child in LoadoutPanel.Children)
+        {
+            if (child is TextBlock tb && tb.Tag is string tag && tag == "SpaceBudget")
+            {
+                tb.Text = $"Space Budget: {usedSpace}/{_selectedChassis.TotalSpace} used";
+                tb.Foreground = usedSpace > _selectedChassis.TotalSpace
+                    ? System.Windows.Media.Brushes.Red
+                    : System.Windows.Media.Brushes.LimeGreen;
+                break;
+            }
         }
     }
 
@@ -250,7 +300,8 @@ TACTICAL ASSESSMENT
         if (_selectedChassis != null)
         {
             var weaponCount = _selectedLoadout.Values.Count(w => w != null);
-            SelectedFrameText.Text = $"{_selectedChassis.Designation} {_selectedChassis.Name} ({weaponCount} weapons)";
+            int usedSpace = _selectedLoadout.Values.Where(w => w != null).Sum(w => w!.SpaceCost);
+            SelectedFrameText.Text = $"{_selectedChassis.Designation} {_selectedChassis.Name} ({weaponCount} weapons, {usedSpace}/{_selectedChassis.TotalSpace} space)";
         }
         else
         {
@@ -264,6 +315,16 @@ TACTICAL ASSESSMENT
         {
             MessageBox.Show("Please select a chassis first.", "No Selection", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
+        }
+
+        // Warn if over space budget
+        int usedSpace = _selectedLoadout.Values.Where(w => w != null).Sum(w => w!.SpaceCost);
+        if (usedSpace > _selectedChassis.TotalSpace)
+        {
+            var result = MessageBox.Show(
+                $"Loadout exceeds space budget ({usedSpace}/{_selectedChassis.TotalSpace}). Confirm anyway?",
+                "Over Budget", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes) return;
         }
 
         DialogResult = true;

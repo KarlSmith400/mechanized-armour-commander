@@ -1,0 +1,56 @@
+<Window x:Class="MechanizedArmourCommander.UI.MainMenuWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Mechanized Armour Commander" Height="600" Width="800"
+        Background="#0D0D0D"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanMinimize">
+    <Grid>
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+            <!-- Title -->
+            <TextBlock Text="MECHANIZED ARMOUR"
+                       FontSize="32" FontWeight="Bold"
+                       Foreground="#00FF00" FontFamily="Consolas"
+                       HorizontalAlignment="Center"
+                       Margin="0,0,0,0"/>
+            <TextBlock Text="COMMANDER"
+                       FontSize="32" FontWeight="Bold"
+                       Foreground="#00FF00" FontFamily="Consolas"
+                       HorizontalAlignment="Center"
+                       Margin="0,0,0,40"/>
+
+            <!-- Menu Buttons -->
+            <Button Content="NEW GAME" Click="NewGame_Click"
+                    Style="{x:Null}"
+                    Width="240" Height="44" Margin="0,0,0,8"
+                    FontFamily="Consolas" FontSize="14" FontWeight="Bold"
+                    Background="#003300" Foreground="#00FF00"
+                    BorderBrush="#006600" BorderThickness="1"/>
+            <Button Content="LOAD GAME" Click="LoadGame_Click"
+                    Style="{x:Null}"
+                    Width="240" Height="44" Margin="0,0,0,8"
+                    FontFamily="Consolas" FontSize="14" FontWeight="Bold"
+                    Background="#003300" Foreground="#00FF00"
+                    BorderBrush="#006600" BorderThickness="1"/>
+            <Button Content="SETTINGS" Click="Settings_Click"
+                    Style="{x:Null}"
+                    Width="240" Height="44" Margin="0,0,0,8"
+                    FontFamily="Consolas" FontSize="14" FontWeight="Bold"
+                    Background="#001A00" Foreground="#006600"
+                    BorderBrush="#004400" BorderThickness="1"/>
+            <Button Content="EXIT" Click="Exit_Click"
+                    Style="{x:Null}"
+                    Width="240" Height="44" Margin="0,0,0,0"
+                    FontFamily="Consolas" FontSize="14" FontWeight="Bold"
+                    Background="#1A0000" Foreground="#FF3333"
+                    BorderBrush="#660000" BorderThickness="1"/>
+
+            <!-- Version -->
+            <TextBlock Text="v0.3.0"
+                       FontSize="10"
+                       Foreground="#333333" FontFamily="Consolas"
+                       HorizontalAlignment="Center"
+                       Margin="0,30,0,0"/>
+        </StackPanel>
+    </Grid>
+</Window>

@@ -1,3 +1,4 @@
+using MechanizedArmourCommander.Data.Models;
 using Microsoft.Data.Sqlite;
 
 namespace MechanizedArmourCommander.Data;
@@ -9,10 +10,14 @@ public class DatabaseContext : IDisposable
 {
     private readonly string _connectionString;
     private SqliteConnection? _connection;
+    private const int SchemaVersion = 5; // Increment when schema changes
+
+    public string DatabasePath { get; }
 
     public DatabaseContext(string databasePath = "MechanizedArmourCommander.db")
     {
-        _connectionString = $"Data Source={databasePath}";
+        DatabasePath = databasePath;
+        _connectionString = $"Data Source={databasePath};Pooling=False";
     }
 
     public SqliteConnection GetConnection()
@@ -25,16 +30,114 @@ public class DatabaseContext : IDisposable
         return _connection;
     }
 
-    public void Initialize()
+    public void Initialize(string? companyName = null)
     {
         var connection = GetConnection();
+
+        if (!IsSchemaUpToDate(connection))
+        {
+            DropAllTables(connection);
+        }
+
         CreateTables(connection);
-        SeedInitialData(connection);
+        SeedInitialData(connection, companyName);
+    }
+
+    /// <summary>
+    /// Reads PlayerState from a database file without initializing/seeding.
+    /// Returns null if the file doesn't exist or has no PlayerState.
+    /// </summary>
+    public static PlayerState? PeekPlayerState(string databasePath)
+    {
+        if (!System.IO.File.Exists(databasePath))
+            return null;
+
+        try
+        {
+            using var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False");
+            connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT Credits, Reputation, MissionsCompleted, MissionsWon, CompanyName, CurrentDay FROM PlayerState LIMIT 1";
+            using var reader = command.ExecuteReader();
+            if (!reader.Read()) return null;
+
+            return new PlayerState
+            {
+                Credits = reader.GetInt32(reader.GetOrdinal("Credits")),
+                Reputation = reader.GetInt32(reader.GetOrdinal("Reputation")),
+                MissionsCompleted = reader.GetInt32(reader.GetOrdinal("MissionsCompleted")),
+                MissionsWon = reader.GetInt32(reader.GetOrdinal("MissionsWon")),
+                CompanyName = reader.GetString(reader.GetOrdinal("CompanyName")),
+                CurrentDay = reader.GetInt32(reader.GetOrdinal("CurrentDay"))
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool IsSchemaUpToDate(SqliteConnection connection)
+    {
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT Version FROM SchemaVersion LIMIT 1";
+            var version = (long?)command.ExecuteScalar();
+            return version == SchemaVersion;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void DropAllTables(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+            DROP TABLE IF EXISTS FactionStanding;
+            DROP TABLE IF EXISTS Faction;
+            DROP TABLE IF EXISTS Inventory;
+            DROP TABLE IF EXISTS Loadout;
+            DROP TABLE IF EXISTS FrameInstance;
+            DROP TABLE IF EXISTS Weapon;
+            DROP TABLE IF EXISTS Chassis;
+            DROP TABLE IF EXISTS Pilot;
+            DROP TABLE IF EXISTS PlayerState;
+            DROP TABLE IF EXISTS SchemaVersion;
+        ";
+        command.ExecuteNonQuery();
     }
 
     private void CreateTables(SqliteConnection connection)
     {
         var createTablesScript = @"
+            -- Schema version tracking
+            CREATE TABLE IF NOT EXISTS SchemaVersion (
+                Version INTEGER NOT NULL
+            );
+
+            -- Faction table
+            CREATE TABLE IF NOT EXISTS Faction (
+                FactionId INTEGER PRIMARY KEY AUTOINCREMENT,
+                Name TEXT NOT NULL,
+                ShortName TEXT NOT NULL,
+                Description TEXT NOT NULL,
+                Color TEXT NOT NULL,
+                WeaponPreference TEXT NOT NULL,
+                ChassisPreference TEXT NOT NULL,
+                EnemyPrefix TEXT NOT NULL
+            );
+
+            -- Faction standing
+            CREATE TABLE IF NOT EXISTS FactionStanding (
+                FactionId INTEGER NOT NULL,
+                Standing INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (FactionId) REFERENCES Faction(FactionId)
+            );
+
             -- Chassis table
             CREATE TABLE IF NOT EXISTS Chassis (
                 ChassisId INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,11 +147,19 @@ public class DatabaseContext : IDisposable
                 HardpointSmall INTEGER NOT NULL,
                 HardpointMedium INTEGER NOT NULL,
                 HardpointLarge INTEGER NOT NULL,
-                HeatCapacity INTEGER NOT NULL,
-                AmmoCapacity INTEGER NOT NULL,
-                ArmorPoints INTEGER NOT NULL,
+                ReactorOutput INTEGER NOT NULL,
+                MovementEnergyCost INTEGER NOT NULL,
+                TotalSpace INTEGER NOT NULL,
+                MaxArmorTotal INTEGER NOT NULL,
+                StructureHead INTEGER NOT NULL,
+                StructureCenterTorso INTEGER NOT NULL,
+                StructureSideTorso INTEGER NOT NULL,
+                StructureArm INTEGER NOT NULL,
+                StructureLegs INTEGER NOT NULL,
                 BaseSpeed INTEGER NOT NULL,
-                BaseEvasion INTEGER NOT NULL
+                BaseEvasion INTEGER NOT NULL,
+                FactionId INTEGER,
+                FOREIGN KEY (FactionId) REFERENCES Faction(FactionId)
             );
 
             -- Weapon table
@@ -56,37 +167,18 @@ public class DatabaseContext : IDisposable
                 WeaponId INTEGER PRIMARY KEY AUTOINCREMENT,
                 Name TEXT NOT NULL,
                 HardpointSize TEXT NOT NULL,
-                HeatGeneration INTEGER NOT NULL,
-                AmmoConsumption INTEGER NOT NULL,
+                WeaponType TEXT NOT NULL,
+                EnergyCost INTEGER NOT NULL,
+                AmmoPerShot INTEGER NOT NULL,
+                SpaceCost INTEGER NOT NULL,
                 Damage INTEGER NOT NULL,
                 RangeClass TEXT NOT NULL,
                 BaseAccuracy INTEGER NOT NULL,
                 SalvageValue INTEGER NOT NULL,
                 PurchaseCost INTEGER NOT NULL,
-                SpecialEffect TEXT
-            );
-
-            -- FrameInstance table
-            CREATE TABLE IF NOT EXISTS FrameInstance (
-                InstanceId INTEGER PRIMARY KEY AUTOINCREMENT,
-                ChassisId INTEGER NOT NULL,
-                CustomName TEXT NOT NULL,
-                CurrentArmor INTEGER NOT NULL,
-                Status TEXT NOT NULL,
-                RepairCost INTEGER NOT NULL,
-                RepairTime INTEGER NOT NULL,
-                AcquisitionDate TEXT NOT NULL,
-                FOREIGN KEY (ChassisId) REFERENCES Chassis(ChassisId)
-            );
-
-            -- Loadout table
-            CREATE TABLE IF NOT EXISTS Loadout (
-                LoadoutId INTEGER PRIMARY KEY AUTOINCREMENT,
-                InstanceId INTEGER NOT NULL,
-                HardpointSlot TEXT NOT NULL,
-                WeaponId INTEGER NOT NULL,
-                FOREIGN KEY (InstanceId) REFERENCES FrameInstance(InstanceId),
-                FOREIGN KEY (WeaponId) REFERENCES Weapon(WeaponId)
+                SpecialEffect TEXT,
+                FactionId INTEGER,
+                FOREIGN KEY (FactionId) REFERENCES Faction(FactionId)
             );
 
             -- Pilot table
@@ -103,18 +195,81 @@ public class DatabaseContext : IDisposable
                 InjuryDays INTEGER NOT NULL,
                 Morale INTEGER NOT NULL
             );
+
+            -- FrameInstance table
+            CREATE TABLE IF NOT EXISTS FrameInstance (
+                InstanceId INTEGER PRIMARY KEY AUTOINCREMENT,
+                ChassisId INTEGER NOT NULL,
+                CustomName TEXT NOT NULL,
+                ArmorHead INTEGER NOT NULL,
+                ArmorCenterTorso INTEGER NOT NULL,
+                ArmorLeftTorso INTEGER NOT NULL,
+                ArmorRightTorso INTEGER NOT NULL,
+                ArmorLeftArm INTEGER NOT NULL,
+                ArmorRightArm INTEGER NOT NULL,
+                ArmorLegs INTEGER NOT NULL,
+                ReactorStress INTEGER NOT NULL DEFAULT 0,
+                Status TEXT NOT NULL,
+                RepairCost INTEGER NOT NULL,
+                RepairTime INTEGER NOT NULL,
+                AcquisitionDate TEXT NOT NULL,
+                PilotId INTEGER,
+                FOREIGN KEY (ChassisId) REFERENCES Chassis(ChassisId),
+                FOREIGN KEY (PilotId) REFERENCES Pilot(PilotId)
+            );
+
+            -- Loadout table
+            CREATE TABLE IF NOT EXISTS Loadout (
+                LoadoutId INTEGER PRIMARY KEY AUTOINCREMENT,
+                InstanceId INTEGER NOT NULL,
+                HardpointSlot TEXT NOT NULL,
+                WeaponId INTEGER NOT NULL,
+                WeaponGroup INTEGER NOT NULL DEFAULT 1,
+                MountLocation TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (InstanceId) REFERENCES FrameInstance(InstanceId),
+                FOREIGN KEY (WeaponId) REFERENCES Weapon(WeaponId)
+            );
+
+            -- PlayerState table (single row for campaign state)
+            CREATE TABLE IF NOT EXISTS PlayerState (
+                Credits INTEGER NOT NULL,
+                Reputation INTEGER NOT NULL,
+                MissionsCompleted INTEGER NOT NULL,
+                MissionsWon INTEGER NOT NULL,
+                CompanyName TEXT NOT NULL,
+                CurrentDay INTEGER NOT NULL
+            );
+
+            -- Inventory table (company weapon storage)
+            CREATE TABLE IF NOT EXISTS Inventory (
+                InventoryId INTEGER PRIMARY KEY AUTOINCREMENT,
+                WeaponId INTEGER NOT NULL,
+                FOREIGN KEY (WeaponId) REFERENCES Weapon(WeaponId)
+            );
         ";
 
         using var command = connection.CreateCommand();
         command.CommandText = createTablesScript;
         command.ExecuteNonQuery();
+
+        // Insert schema version if not present
+        using var versionCheck = connection.CreateCommand();
+        versionCheck.CommandText = "SELECT COUNT(*) FROM SchemaVersion";
+        var count = (long?)versionCheck.ExecuteScalar();
+        if (count == 0)
+        {
+            using var insertVersion = connection.CreateCommand();
+            insertVersion.CommandText = "INSERT INTO SchemaVersion (Version) VALUES (@version)";
+            insertVersion.Parameters.AddWithValue("@version", SchemaVersion);
+            insertVersion.ExecuteNonQuery();
+        }
     }
 
-    private void SeedInitialData(SqliteConnection connection)
+    private void SeedInitialData(SqliteConnection connection, string? companyName = null)
     {
         // Check if data already exists
         using var checkCommand = connection.CreateCommand();
-        checkCommand.CommandText = "SELECT COUNT(*) FROM Chassis";
+        checkCommand.CommandText = "SELECT COUNT(*) FROM Faction";
         var count = (long?)checkCommand.ExecuteScalar();
 
         if (count > 0)
@@ -124,7 +279,7 @@ public class DatabaseContext : IDisposable
 
         // Seed initial data using DataSeeder
         var seeder = new DataSeeder(this);
-        seeder.SeedAll();
+        seeder.SeedAll(companyName ?? "Iron Wolves");
     }
 
     public void Dispose()

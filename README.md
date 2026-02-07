@@ -1,6 +1,6 @@
 # Mechanized Armour Commander
 
-A management-focused mechanized combat simulator where players build and maintain a stable of combat frames, manage pilots, and accept contracts. Combat is auto-resolved with strategic pre-mission decisions driving outcomes.
+A tactical mech combat game with full campaign management. Build and maintain a company of combat frames, hire and train pilots, accept mission contracts, and lead your lance into turn-based tactical combat. Salvage enemy wreckage, refit your frames, and grow your mercenary company.
 
 ## Project Structure
 
@@ -8,22 +8,27 @@ A management-focused mechanized combat simulator where players build and maintai
 MechanizedArmourCommander/
 ├── src/
 │   ├── MechanizedArmourCommander.UI/          # WPF Desktop Application
-│   │   ├── Views/                             # XAML views
-│   │   ├── ViewModels/                        # MVVM view models
-│   │   ├── Controls/                          # Custom controls
-│   │   └── MainWindow.xaml                    # Main application window
+│   │   ├── MainMenuWindow.xaml                # Title screen & profile selection
+│   │   ├── SaveSlotWindow.xaml                # Save slot management (5 slots)
+│   │   ├── ManagementWindow.xaml              # Company HQ (roster, market, refit, missions)
+│   │   ├── MainWindow.xaml                    # Combat view (battlefield, tactical decisions)
+│   │   ├── TacticalDecisionWindow.xaml        # Per-frame action planning
+│   │   ├── FrameSelectorWindow.xaml           # Frame/loadout browser
+│   │   ├── PostCombatWindow.xaml              # Results, salvage selection
+│   │   └── SettingsWindow.xaml                # Settings (placeholder)
 │   │
 │   ├── MechanizedArmourCommander.Core/        # Game Logic & Systems
-│   │   ├── Models/                            # Core game models (CombatFrame, TacticalOrders, etc.)
-│   │   ├── Combat/                            # Combat resolution engine
-│   │   └── Services/                          # High-level services (CombatService, etc.)
+│   │   ├── Models/                            # Game models (CombatFrame, Mission, etc.)
+│   │   ├── Combat/                            # Combat subsystems (damage, reactor, actions, AI)
+│   │   └── Services/                          # CombatService, ManagementService, MissionService
 │   │
 │   └── MechanizedArmourCommander.Data/        # Data Access Layer
-│       ├── Models/                            # Database entity models (Chassis, Weapon, Pilot, etc.)
-│       ├── Repositories/                      # Data access repositories
-│       └── DatabaseContext.cs                 # SQLite database management
+│       ├── Models/                            # Database entities (Chassis, Weapon, Pilot, etc.)
+│       ├── Repositories/                      # Data access (11 repositories)
+│       └── DatabaseContext.cs                 # SQLite management & schema versioning
 │
-├── mechanized-armour-commander-design.md      # Complete design document
+├── CORE_RULES.md                              # Authoritative game rules reference
+├── CHANGELOG.md                               # Detailed change history
 ├── MechanizedArmourCommander.sln              # Visual Studio solution
 └── README.md                                  # This file
 ```
@@ -34,118 +39,124 @@ MechanizedArmourCommander/
 - **UI**: WPF (Windows Presentation Foundation)
 - **Database**: SQLite with Microsoft.Data.Sqlite
 - **Language**: C# 13
+- **Architecture**: 3-layer (UI → Core → Data), repository pattern, no EF
 
-## Current Status: Combat Prototype
+## Features
 
-The project is currently at **Milestone 1: Combat Prototype** phase with the following features implemented:
+### Main Menu & Save System
+- Title screen with NEW GAME, LOAD GAME, SETTINGS, EXIT
+- 5 named save slots, each stored as a separate `.db` file
+- Custom company name on new game creation
+- Delete and overwrite existing saves
 
-### Completed Features
-- ✅ Project structure with 3 layered projects (UI, Core, Data)
-- ✅ Core data models (Chassis, Weapon, Pilot, FrameInstance, Loadout)
-- ✅ Combat runtime models (CombatFrame, TacticalOrders, CombatLog)
-- ✅ SQLite database setup with schema
-- ✅ Repository pattern for data access
-- ✅ Combat resolution engine with:
-  - Initiative system (speed-based)
-  - To-hit calculations (accuracy, gunnery, evasion)
-  - Damage resolution with hit locations
-  - Critical hits (5% chance, 2x damage)
-  - Heat and ammo management
-  - Combat logging system
-- ✅ Basic WPF UI for combat testing
-  - Player and enemy force displays
-  - Combat feed with round-by-round results
-  - Test scenario with pre-configured frames
+### Faction System
+- **3 Factions**: Crucible Industries (corporate/energy), Terran Directorate (military/balanced), Outer Reach Collective (frontier/ballistic)
+- **Standing Levels**: Hostile → Neutral → Friendly → Allied → Trusted
+- **Faction Markets**: Each faction sells its own chassis and weapons, plus universal items
+- **Standing-Based Discounts**: Friendly 5%, Allied 10%, Trusted 20% off
+- **Exclusive Weapons**: High-tier faction weapons unlocked at Allied standing (200+)
+- **Faction-Biased Enemies**: Enemy forces use their faction's chassis and weapons (70% bias)
+- **Standing Consequences**: Winning missions raises employer standing, lowers rival standings
 
-### Next Steps
-- [ ] Seed initial data (chassis and weapons from design doc)
-- [ ] Add tactical orders UI controls
-- [ ] Implement real-time combat feed animation
-- [ ] Add post-combat damage assessment
-- [ ] Begin Milestone 2: Management Core
+### Company Management (HQ)
+- **Roster**: View owned frames with status, assigned pilot, loadout, repair/sell/rename
+- **Pilots**: Hire, assign, and track pilot stats (Gunnery, Piloting, Tactics)
+- **Market**: Faction-filtered marketplace with standing-based discounts and exclusive items
+- **Inventory**: Company weapon storage — buy, sell, salvage flows through here
+- **Refit**: Equip/unequip weapons between frames and inventory
+- **Missions**: Browse 3 faction-driven contracts with employer/opponent factions
+- **Deploy**: Select 1-4 frames with pilots for mission deployment
+
+### Tactical Combat
+- **Action Point Economy**: 2 AP per frame per round (Move, Fire, Brace, Called Shot, Overwatch, Vent, Sprint)
+- **Range Bands**: Point Blank, Short, Medium, Long — weapon effectiveness varies by range
+- **Layered Damage**: 7 hit locations with Armor → Structure → Component damage cascade
+- **Reactor Energy**: Manage energy budget each round — overloading risks shutdown
+- **Weapon Groups**: Assign weapons to groups, fire as single actions
+- **AI Opponents**: Aggressive/Balanced/Defensive stances with target priority logic
+- **Battlefield Map**: Canvas-based X,Y unit plotting with range band zones
+
+### Post-Combat
+- Victory/Defeat/Withdrawal outcomes with financial report
+- Interactive salvage selection from destroyed enemy wreckage (with item values displayed)
+- Faction standing changes based on mission outcome
+- Pilot XP gain, injury tracking, KIA
+- Per-frame damage reports with repair costs
+
+### Economy
+- Starting credits: 500,000
+- Chassis: 100K (Light) to 650K (Assault)
+- Repair costs scale with damage
+- Mission rewards: 40K-300K based on difficulty
+- Pilot hiring: 30,000 credits
 
 ## How to Run
 
 ### Prerequisites
 - .NET 9 SDK or later
-- Windows 10/11 (for WPF)
-- Visual Studio 2022 or Visual Studio Code
+- Windows 10/11 (required for WPF)
 
 ### Build and Run
 
-**Option 1: Using the rename script (Recommended)**
-1. Close Visual Studio if open
-2. Run the rename script: `powershell -ExecutionPolicy Bypass -File rename-project.ps1`
-3. Open `MechanizedArmourCommander.sln` in Visual Studio
-4. Set `MechanizedArmourCommander.UI` as the startup project
-5. Press F5 to build and run
-
-**Option 2: Command line (after running rename script)**
 ```bash
 dotnet build MechanizedArmourCommander.sln
 dotnet run --project src/MechanizedArmourCommander.UI/MechanizedArmourCommander.UI.csproj
 ```
 
-## Combat Prototype Testing
+Or open `MechanizedArmourCommander.sln` in Visual Studio 2022, set `MechanizedArmourCommander.UI` as startup project, and press F5.
 
-The current build includes a test scenario with:
-- **Player Forces**:
-  - Alpha (VG-45 Vanguard, Medium) - Pilot: Razor
-  - Bravo (SC-20 Scout, Light) - Pilot: Ghost
-- **Enemy Forces**:
-  - Enemy-1 (BR-70 Bruiser, Heavy)
-  - Enemy-2 (RD-30 Raider, Light)
+### First Launch
+1. Main menu appears — click **NEW GAME**
+2. Select a save slot and enter your company name
+3. You start with 500,000 credits, 2 frames, and 4 pilots
+4. Browse **MISSIONS**, **DEPLOY** your lance, and fight
+5. After combat, collect salvage and manage your company
+6. **SAVE & EXIT** returns to main menu
 
-Click "START COMBAT" to run the auto-resolved combat simulation and see the results in the combat feed.
+## Game Rules
 
-## Development Roadmap
+See [CORE_RULES.md](CORE_RULES.md) for the complete authoritative rules reference covering:
+- Combat round structure and end conditions
+- Accuracy formula with all modifiers
+- Damage resolution and component damage
+- Reactor energy and shutdown mechanics
+- Loadout, hardpoints, and space budget
+- Chassis class stats and pilot skills
+- AI behavior and economy rules
 
-See [mechanized-armour-commander-design.md](mechanized-armour-commander-design.md) for complete design specifications.
+## Development Status
 
-### Milestone 1: Combat Prototype (Current)
-- Implement combat resolution system ✅
-- Basic weapon and frame models ✅
-- Text-based combat feed ✅
-- Test balance with simple scenarios (In Progress)
+### Completed
+- Combat system with action points, range bands, layered damage, reactor energy
+- Full management hub (roster, pilots, market, inventory, refit, missions, deploy)
+- Mission generation and post-combat results with salvage
+- Pilot system with XP, injuries, KIA
+- Main menu with 5 named save slots
+- Campaign loop: Menu → HQ → Deploy → Combat → Results → HQ
+- 3-faction system with standings, faction markets, discounts, and exclusive weapons
+- Frame renaming from roster UI
+- Salvage value display on post-combat loot screen
 
-### Milestone 2: Management Core
-- Build hangar/workshop screens
-- Implement repair and salvage systems
-- Basic economy tracking
-- Save/load functionality
-
-### Milestone 3: Mission System
-- Mission generation
-- Pre-mission loadout screen
-- Tactical orders implementation
-- Post-mission flows
-
-### Milestone 4: Pilot System
-- Pilot roster management
-- Skill progression
-- Injury/fatigue mechanics
-- Performance tracking
-
-### Milestone 5: Polish & Balance
-- UI improvements
-- Balance tuning
-- Bug fixes
+### Planned
+- Settings screen (difficulty, audio, etc.)
+- Pilot skill leveling on XP thresholds
+- Terrain and environmental modifiers
+- Special weapon effects
 - Tutorial/onboarding
 
 ## Design Philosophy
 
-- **Management over twitch** - Player wins through preparation, not execution
-- **Meaningful choices** - Every decision should have tradeoffs
-- **Resource scarcity** - Can't have/do everything, forces prioritization
-- **Emergent narratives** - Pilots and frames develop history through play
-- **Clear feedback** - Player always knows why they won or lost
-- **Modular design** - Easy to expand content without code changes
+- **Management over twitch** — Player wins through preparation, not execution
+- **Meaningful choices** — Every decision has tradeoffs
+- **Resource scarcity** — Can't have everything, forces prioritization
+- **Emergent narratives** — Pilots and frames develop history through play
+- **Clear feedback** — Player always knows why they won or lost
 
 ## License
 
 **Proprietary Software - All Rights Reserved**
 
-Copyright © 2026. This software is proprietary and confidential. Unauthorized copying, distribution, modification, or use of this software, via any medium, is strictly prohibited without explicit written permission from the copyright holder.
+Copyright 2026. This software is proprietary and confidential. Unauthorized copying, distribution, modification, or use of this software, via any medium, is strictly prohibited without explicit written permission from the copyright holder.
 
 This code is provided for **viewing and portfolio purposes only**. No license is granted for any use whatsoever.
 
@@ -157,4 +168,4 @@ For licensing inquiries or permission requests, please contact the repository ow
 
 ---
 
-*Last Updated: 2026-01-02*
+*Last Updated: 2026-02-07*

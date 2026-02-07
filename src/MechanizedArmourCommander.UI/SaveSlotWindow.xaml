@@ -1,0 +1,63 @@
+<Window x:Class="MechanizedArmourCommander.UI.SaveSlotWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Select Save Slot" Height="550" Width="600"
+        Background="#0D0D0D"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <TextBlock x:Name="HeaderText" Grid.Row="0"
+                   FontSize="18" FontWeight="Bold"
+                   Foreground="#00FF00" FontFamily="Consolas"
+                   HorizontalAlignment="Center"
+                   Margin="0,0,0,12"/>
+
+        <!-- Slot List -->
+        <StackPanel x:Name="SlotPanel" Grid.Row="1"/>
+
+        <!-- Company Name Input (NewGame only) -->
+        <StackPanel x:Name="CompanyNamePanel" Grid.Row="2"
+                    Orientation="Horizontal" HorizontalAlignment="Center"
+                    Margin="0,12,0,0" Visibility="Collapsed">
+            <TextBlock Text="Company Name: "
+                       FontSize="12" FontWeight="Bold"
+                       Foreground="#00AA00" FontFamily="Consolas"
+                       VerticalAlignment="Center"/>
+            <TextBox x:Name="CompanyNameInput"
+                     Width="220" Height="28"
+                     FontFamily="Consolas" FontSize="12"
+                     Background="#0A0A0A" Foreground="#00FF00"
+                     BorderBrush="#006600" BorderThickness="1"
+                     CaretBrush="#00FF00"
+                     Padding="4,2"
+                     Text="Iron Wolves"/>
+        </StackPanel>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal"
+                    HorizontalAlignment="Center" Margin="0,12,0,0">
+            <Button x:Name="ConfirmButton" Content="CONFIRM"
+                    Click="Confirm_Click"
+                    Style="{x:Null}"
+                    Width="120" Height="36" Margin="0,0,12,0"
+                    FontFamily="Consolas" FontSize="12" FontWeight="Bold"
+                    Background="#003300" Foreground="#00FF00"
+                    BorderBrush="#006600" BorderThickness="1"
+                    IsEnabled="False"/>
+            <Button Content="CANCEL" Click="Cancel_Click"
+                    Style="{x:Null}"
+                    Width="120" Height="36"
+                    FontFamily="Consolas" FontSize="12" FontWeight="Bold"
+                    Background="#1A0000" Foreground="#FF3333"
+                    BorderBrush="#660000" BorderThickness="1"/>
+        </StackPanel>
+    </Grid>
+</Window>

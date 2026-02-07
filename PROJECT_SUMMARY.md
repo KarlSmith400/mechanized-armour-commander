@@ -1,271 +1,240 @@
-# Mech Commander - Project Setup Summary
+# Mechanized Armour Commander - Project Summary
 
 ## What We've Built
 
-Successfully set up a complete WPF C# project structure for Mech Commander with three core layers:
+A WPF C# tactical mech combat game with full campaign management, a 3-faction ecosystem, and a complete resource-based combat system built on three core layers:
 
-### 1. **MechCommander.Data** - Data Access Layer
-- **Database Models**: Chassis, Weapon, FrameInstance, Loadout, Pilot
-- **Repositories**: ChassisRepository, WeaponRepository (with full CRUD operations)
-- **DatabaseContext**: SQLite database initialization and management
-- **Schema**: Tables for all core game entities with foreign key relationships
+### 1. **MechanizedArmourCommander.Data** - Data Access Layer
+- **Database Models**: Chassis, Weapon, FrameInstance, Loadout, Pilot, PlayerState, InventoryItem, Faction, FactionStanding
+- **Repositories**: 11 repositories (Chassis, Weapon, FrameInstance, Loadout, Pilot, PlayerState, Inventory, Faction, FactionStanding)
+- **DatabaseContext**: SQLite database initialization, schema versioning (v5), auto-migration
+- **DataSeeder**: Seeds 3 factions, 12 chassis, 16 weapons (incl. 3 faction exclusives), 4 pilots, starting frames
+- **Schema**: 9 tables + SchemaVersion table for automatic migration detection
 
-### 2. **MechCommander.Core** - Game Logic & Combat Engine
-- **Combat Models**: CombatFrame, EquippedWeapon, CombatLog, CombatRound, CombatEvent
-- **Tactical System**: TacticalOrders with enums for Stance, TargetPriority, Formation, WithdrawalThreshold
-- **CombatEngine**: Full combat resolution system with:
-  - Initiative based on frame speed
-  - To-hit calculations (weapon accuracy + pilot gunnery - target evasion)
-  - Damage resolution with randomized hit locations (CT, RT, LT, RA, LA, LEGS)
-  - 5% critical hit chance (2x damage)
-  - Heat and ammo tracking
-  - Auto-cooling and resource management
-  - Target selection based on tactical orders
-- **CombatService**: High-level service for executing and formatting combat
+### 2. **MechanizedArmourCommander.Core** - Game Logic & Combat Engine
+- **Combat Models**:
+  - CombatFrame - Per-location armor/structure, reactor energy, weapon groups, action points
+  - CombatEnums - HitLocation, RangeBand, CombatAction, ComponentDamageType, MovementDirection
+  - CombatLog - Comprehensive event logging with 14 event types
+  - TacticalOrders - Stance, TargetPriority, WithdrawalThreshold, PreferredRange
+  - RoundTacticalDecision - Per-frame action orders with PlannedAction lists
+- **Combat Subsystems**:
+  - CombatEngine - Orchestrates all subsystems, resolves rounds and full combats
+  - DamageSystem - Hit locations, layered damage (armor/structure), component damage, damage transfer
+  - ReactorSystem - Energy refresh, consumption, overload stress, shutdown mechanics
+  - ActionSystem - AP management, action validation, cost enforcement
+  - PositioningSystem - Range band management, movement costs, range accuracy modifiers
+  - CombatAI - Stance-based decision generation, target selection, weapon group scoring
+- **Services**:
+  - CombatService - High-level combat management, round execution, log formatting
+  - ManagementService - Roster, economy, refit, inventory, faction market operations
+  - MissionService - Faction-aware mission generation, enemy building, results processing
 
-### 3. **MechCommander.UI** - WPF Desktop Application
-- **MainWindow**: Full combat prototype UI with:
+### 3. **MechanizedArmourCommander.UI** - WPF Desktop Application
+- **MainMenuWindow** - Title screen with NEW GAME, LOAD GAME, SETTINGS, EXIT
+- **SaveSlotWindow** - 5 named save slots, each stored as a separate .db file
+- **ManagementWindow** - Company HQ with 7 sections:
+  - Roster (view/rename/repair/sell frames), Pilots, Market (faction-filtered with discounts), Inventory, Refit, Missions (faction-driven contracts), Deploy
+  - Status bar with credits, reputation, day counter, faction standings
+- **MainWindow** - Combat view with:
+  - Battlefield map (Canvas-based X,Y unit plotting with grid overlay)
   - Three-column layout (Player Forces | Combat Feed | Enemy Forces)
   - Terminal-style green-on-black aesthetic
-  - Frame status displays with armor/pilot info
-  - Scrolling combat feed with round-by-round results
-  - Start Combat and Reset buttons
-- **Test Scenario**: Pre-configured 2v2 combat scenario for immediate testing
-
-## Project Statistics
-
-- **Total Projects**: 3
-- **Total Classes**: 17
-- **Lines of Code**: ~1,200+
-- **External Dependencies**: Microsoft.Data.Sqlite (v9.0.0)
-- **Build Status**: ✅ Clean build, no warnings, no errors
+  - Frame status with reactor energy, armor %, pilot info
+  - Tactical mode toggle for round-by-round or auto-resolve combat
+- **TacticalDecisionWindow** - Per-frame action planning:
+  - Situation report with per-location damage, reactor status, weapon groups
+  - Frame tab switching for multi-frame planning
+  - Action slot selection with sub-options (weapon groups, movement direction, called shot locations)
+  - Focus target selection, withdrawal option, auto-resolve toggle
+- **PostCombatWindow** - Results, salvage selection (with values), faction standing changes
+- **FrameSelectorWindow** - Frame configuration:
+  - Browse 12 chassis with class filtering
+  - Detailed specs (reactor output, movement cost, structure, space budget)
+  - Dynamic weapon loadout with space budget tracking
+  - Tactical assessment per chassis class
+- **SettingsWindow** - Settings (placeholder)
 
 ## File Structure
 
 ```
 Project M/
 ├── src/
-│   ├── MechCommander.UI/           [WPF Project]
-│   │   ├── Views/
-│   │   ├── ViewModels/
-│   │   ├── Controls/
-│   │   ├── MainWindow.xaml         [Combat UI]
-│   │   └── MainWindow.xaml.cs      [UI Logic]
+│   ├── MechanizedArmourCommander.UI/
+│   │   ├── MainMenuWindow.xaml          [Title screen & profile selection]
+│   │   ├── SaveSlotWindow.xaml          [Save slot management (5 slots)]
+│   │   ├── ManagementWindow.xaml        [Company HQ — roster, market, refit, missions]
+│   │   ├── MainWindow.xaml              [Combat UI + Battlefield Map]
+│   │   ├── TacticalDecisionWindow.xaml  [Per-frame action planner]
+│   │   ├── FrameSelectorWindow.xaml     [Frame configuration]
+│   │   ├── PostCombatWindow.xaml        [Results, salvage, faction standings]
+│   │   └── SettingsWindow.xaml          [Settings (placeholder)]
 │   │
-│   ├── MechCommander.Core/         [Class Library]
+│   ├── MechanizedArmourCommander.Core/
 │   │   ├── Models/
-│   │   │   ├── CombatFrame.cs
-│   │   │   ├── CombatLog.cs
-│   │   │   └── TacticalOrders.cs
+│   │   │   ├── CombatFrame.cs           [Runtime frame state + EquippedWeapon]
+│   │   │   ├── CombatEnums.cs           [HitLocation, RangeBand, CombatAction, etc.]
+│   │   │   ├── CombatLog.cs             [Combat events + 14 event types]
+│   │   │   ├── TacticalOrders.cs        [Stance, TargetPriority, WithdrawalThreshold]
+│   │   │   ├── RoundTacticalDecision.cs [Per-frame actions, FrameSituation, WeaponGroupInfo]
+│   │   │   ├── Mission.cs              [Mission contract + EnemySpec]
+│   │   │   └── MissionResults.cs       [Post-combat results, salvage, faction changes]
 │   │   ├── Combat/
-│   │   │   └── CombatEngine.cs
+│   │   │   ├── CombatEngine.cs          [Round resolution, to-hit, initiative]
+│   │   │   ├── CombatAI.cs              [Stance-based AI action generation]
+│   │   │   ├── DamageSystem.cs          [Layered damage, hit locations, components]
+│   │   │   ├── ReactorSystem.cs         [Energy, stress, overload, shutdown]
+│   │   │   ├── ActionSystem.cs          [AP costs, action validation]
+│   │   │   └── PositioningSystem.cs     [Range bands, movement, accuracy modifiers]
 │   │   └── Services/
-│   │       └── CombatService.cs
+│   │       ├── CombatService.cs         [High-level combat API]
+│   │       ├── ManagementService.cs     [Roster, economy, refit, faction market]
+│   │       └── MissionService.cs        [Faction-aware mission generation]
 │   │
-│   └── MechCommander.Data/         [Class Library]
+│   └── MechanizedArmourCommander.Data/
 │       ├── Models/
-│       │   ├── Chassis.cs
-│       │   ├── Weapon.cs
-│       │   ├── FrameInstance.cs
-│       │   ├── Loadout.cs
-│       │   └── Pilot.cs
+│       │   ├── Chassis.cs               [ReactorOutput, MovementEnergyCost, FactionId]
+│       │   ├── Weapon.cs                [WeaponType, EnergyCost, AmmoPerShot, FactionId]
+│       │   ├── FrameInstance.cs          [Per-location armor, ReactorStress, CustomName]
+│       │   ├── Loadout.cs               [WeaponGroup, MountLocation]
+│       │   ├── Pilot.cs
+│       │   ├── PlayerState.cs           [Credits, reputation, company name, day]
+│       │   ├── InventoryItem.cs         [Company weapon inventory]
+│       │   ├── Faction.cs               [Name, color, weapon/chassis preference]
+│       │   └── FactionStanding.cs       [Standing, StandingLevel, PriceModifier]
 │       ├── Repositories/
-│       │   ├── ChassisRepository.cs
-│       │   └── WeaponRepository.cs
-│       └── DatabaseContext.cs
+│       │   ├── ChassisRepository.cs     [+ GetByFaction]
+│       │   ├── WeaponRepository.cs      [+ GetByFaction]
+│       │   ├── FrameInstanceRepository.cs
+│       │   ├── LoadoutRepository.cs
+│       │   ├── PilotRepository.cs
+│       │   ├── PlayerStateRepository.cs
+│       │   ├── InventoryRepository.cs
+│       │   ├── FactionRepository.cs
+│       │   └── FactionStandingRepository.cs
+│       ├── DatabaseContext.cs            [Schema v5, auto-migration]
+│       └── DataSeeder.cs                [3 factions + 12 chassis + 16 weapons]
 │
-├── mech-commander-design.md        [Complete Design Doc]
-├── README.md                       [Project Documentation]
-├── PROJECT_SUMMARY.md              [This File]
-├── .gitignore                      [Git Configuration]
-└── MechCommander.sln               [Solution File]
+├── CORE_RULES.md                        [Authoritative game rules reference]
+├── README.md
+├── PROJECT_SUMMARY.md                   [This File]
+├── CHANGELOG.md
+└── MechanizedArmourCommander.sln
 ```
 
-## Combat System Features
+## Combat System Architecture
 
-### Implemented
-- ✅ Initiative system (speed-based turn order)
-- ✅ Movement phase with status messages
-- ✅ Attack resolution per weapon
-- ✅ Hit/miss calculations with multiple modifiers
-- ✅ Damage application to armor
-- ✅ Hit location system (6 locations)
-- ✅ Critical hits (5% chance, 2x damage)
-- ✅ Heat generation and dissipation
-- ✅ Ammo consumption and tracking
-- ✅ Frame destruction detection
-- ✅ Victory/defeat conditions
-- ✅ Detailed combat logging
-- ✅ Target selection based on tactical orders
-- ✅ Combat feed formatting
+### Resource Model
+The combat system is built around two competing resource types:
 
-### Not Yet Implemented
-- ⏳ Database seeding with chassis/weapon data
-- ⏳ Tactical orders UI controls
-- ⏳ Withdrawal mechanics
-- ⏳ Pilot morale/stress checks
-- ⏳ Component-specific damage
-- ⏳ Special weapon effects
-- ⏳ Terrain/environmental modifiers
+- **Reactor Energy** (renewable): Refreshes each round to reactor output. Energy weapons consume it. Moving costs it. The key per-round bandwidth constraint.
+- **Ammunition** (finite): Ballistic and missile weapons consume ammo. Free in terms of energy but runs out permanently. The long-term constraint.
 
-## Combat Math Example
+This creates meaningful decisions: energy weapons are sustainable but compete with movement for reactor budget. Ballistic weapons are energy-efficient but will eventually run dry.
 
-**To-Hit Calculation**:
+### Weight Class Identity
+Weight classes emerge naturally from physics rather than arbitrary rules:
+
+| Class   | Reactor | Move Cost | Space  | Identity                           |
+|---------|---------|-----------|--------|------------------------------------|
+| Light   | 10-12   | 2-3E      | 35-45  | Fast, cheap to move, small payload |
+| Medium  | 15-18   | 4-5E      | 50-65  | Balanced reactor and mobility      |
+| Heavy   | 20-24   | 6-8E      | 70-85  | Big reactor, expensive to move     |
+| Assault | 25-30   | 9-12E     | 85-110 | Massive firepower, nearly static   |
+
+### Damage Model
 ```
-Base Hit Chance = Weapon Base Accuracy
-                + (Pilot Gunnery × 2%)
-                - Target Evasion
-
-Clamped to 5-95% range
-
-Example:
-Medium Laser (80%) + Gunnery 5 (10%) - Target Evasion 15%
-= 80 + 10 - 15 = 75% chance to hit
+Incoming Damage
+      ↓
+Hit Location Roll (Head 5%, CT 20%, LT 15%, RT 15%, LA 10%, RA 10%, Legs 25%)
+      ↓
+Armor absorbs damage (ablative, loadout choice)
+      ↓
+Excess goes to Structure (fixed by chassis)
+      ↓
+~40% chance of Component Damage when structure hit
+  - Weapon destroyed, actuator damaged, ammo explosion
+  - Reactor hit, gyro hit, sensor hit, cockpit hit
+      ↓
+Location destroyed → damage transfers (arm→torso, side torso→CT)
+      ↓
+Center Torso structure ≤ 0 → Frame Destroyed
 ```
 
-**Damage**:
+### Combat Round Flow
 ```
-Normal Hit: Weapon Damage
-Critical Hit: Weapon Damage × 2 (5% chance)
+1. Refresh Phase
+   - Reactor energy resets to effective output
+   - Action points reset to 2 (1 if gyro damaged)
 
-Example:
-Medium Laser = 10 damage
-Critical = 20 damage
+2. Initiative Phase
+   - Sort by Speed + PilotPiloting (highest first)
+
+3. Action Phase (per frame in initiative order)
+   - Execute planned actions from player/AI decisions
+   - Each action costs AP and possibly energy
+   - Fire actions: to-hit roll → damage → location → cascade
+
+4. Overwatch Resolution
+   - Frames on overwatch fire at enemies who moved
+
+5. End of Round
+   - Process reactor stress (overload check, shutdown risk)
+   - Clear combat flags (bracing, overwatch)
+   - Natural stress dissipation
 ```
 
-## How to Test
+### To-Hit Calculation
+```
+Hit Chance = Base Weapon Accuracy
+           + (Pilot Gunnery × 2)
+           - Target Evasion
+           + Range Modifier (weapon class vs range band)
+           - Brace Bonus (if target bracing)
+           - Sensor Penalty (if attacker has sensor damage)
+           - Called Shot Penalty (-20 for called shots)
+           - Actuator Penalty (-10 for arm actuator damage)
 
-1. Open the solution in Visual Studio
-2. Set `MechCommander.UI` as startup project
-3. Press F5 to run
-4. Click "START COMBAT" button
-5. Watch the combat feed display round-by-round results
-6. Click "RESET" to run another simulation
+Clamped to 5-95% range.
+Critical hit at 5% chance → triggers component damage.
+```
 
-## Test Scenario Details
+## How to Play
 
-### Player Team
-- **Alpha** - VG-45 Vanguard (Medium, 100 armor)
-  - Pilot: Razor (Gunnery 5, Piloting 4)
-  - Weapons: Medium Laser, Autocannon-5
-
-- **Bravo** - SC-20 Scout (Light, 60 armor)
-  - Pilot: Ghost (Gunnery 6, Piloting 7)
-  - Weapons: Light Laser, Machine Gun
-
-### Enemy Team
-- **Enemy-1** - BR-70 Bruiser (Heavy, 150 armor)
-  - Weapons: Heavy Autocannon, Medium Laser
-
-- **Enemy-2** - RD-30 Raider (Light, 55 armor)
-  - Weapons: Small Missile Rack, Light Laser
-
-## Next Development Steps
-
-Based on the design document's Milestone 1, here are the immediate next steps:
-
-1. **Data Seeding**
-   - Create DataSeeder class
-   - Add all chassis from design doc (12 chassis)
-   - Add all weapons from design doc (20+ weapons)
-   - Initialize starter roster
-
-2. **Balance Testing**
-   - Run multiple combat scenarios
-   - Tune damage values, accuracy, and evasion
-   - Adjust heat/ammo consumption rates
-   - Test different weight classes against each other
-
-3. **UI Enhancements**
-   - Add tactical orders dropdown controls
-   - Show heat/ammo status bars
-   - Animate combat feed (reveal text gradually)
-   - Add frame health bars with color coding
-
-4. **Combat Refinements**
-   - Implement withdrawal threshold checks
-   - Add pilot morale/stress system
-   - Create special weapon effects (Flamer heat, LRM indirect fire)
-   - Add more detailed status reporting
+1. Open the solution in Visual Studio or run `dotnet run --project src/MechanizedArmourCommander.UI`
+2. Main menu appears — click **NEW GAME**
+3. Select a save slot and enter your company name
+4. You start with 500,000 credits, 2 frames, and 4 pilots
+5. Browse **MISSIONS** — each contract shows employer/opponent factions
+6. **DEPLOY** your lance (1-4 frames with pilots)
+7. Fight in tactical or auto-resolve mode
+8. After combat: collect salvage, view faction standing changes
+9. Visit faction **MARKET** for discounted equipment as standings improve
+10. **SAVE & EXIT** returns to main menu
 
 ## Architecture Highlights
 
 ### Separation of Concerns
-- **Data Layer**: Pure data access, no business logic
-- **Core Layer**: All game logic, independent of UI
-- **UI Layer**: Presentation only, delegates to services
+- **Data Layer**: Pure data access, schema management, no business logic
+- **Core Layer**: All game logic, independent of UI, testable in isolation
+- **UI Layer**: Presentation and user interaction, delegates to Core services
 
-### Design Patterns Used
+### Design Patterns
 - **Repository Pattern**: Clean data access abstraction
-- **Service Layer**: High-level business operations
-- **Domain Models**: Rich models with behavior
-- **Event Logging**: Immutable combat history
+- **Service Layer**: High-level operations (CombatService)
+- **Subsystem Architecture**: Combat engine delegates to specialized systems (Damage, Reactor, Action, Positioning)
+- **Event Logging**: Immutable combat history via CombatLog/CombatRound/CombatEvent
 
-### Testability
-The architecture makes it easy to:
-- Unit test combat engine with mock data
-- Integration test database operations
-- UI test with dependency injection
-- Run automated balance simulations
+### Schema Versioning
+The database uses a SchemaVersion table. When the code schema version doesn't match the database, all tables are dropped and recreated with fresh seed data. This handles development iteration without manual migration.
 
-## Combat Flow Diagram
-
-```
-StartCombat()
-    ↓
-Initialize Combat State
-    ↓
-┌─────────────────────────┐
-│   Combat Round Loop     │
-│                         │
-│  1. Initiative Roll     │
-│     (Speed-based)       │
-│         ↓               │
-│  2. Movement Phase      │
-│     (All frames move)   │
-│         ↓               │
-│  3. Attack Phase        │
-│     For each frame:     │
-│       - Select target   │
-│       - Roll to-hit     │
-│       - Apply damage    │
-│       - Log results     │
-│         ↓               │
-│  4. Status Check        │
-│     - Heat dissipation  │
-│     - Frame destruction │
-│     - Victory check     │
-│         ↓               │
-│  [Repeat until winner]  │
-└─────────────────────────┘
-    ↓
-Return CombatLog
-```
-
-## Performance Notes
-
-- SQLite chosen for simplicity and portability
-- Combat resolution is synchronous (instant)
-- Future: Add animation delays for better UX
-- Database queries use parameterized commands (SQL injection safe)
-- Repository pattern allows easy caching implementation later
-
-## Known Limitations (By Design)
-
-1. **No persistent data yet** - Test data is hardcoded
-2. **No save/load** - Planned for Milestone 2
-3. **Simple AI** - Uses tactical order enums only
-4. **No mission context** - Pure combat testing
-5. **Basic UI** - Functional prototype, not polished
-
-## Conclusion
-
-The project foundation is solid and ready for iterative development. The combat engine works, the architecture is clean and extensible, and we have a working prototype to test and balance.
-
-**Estimated completion of Milestone 1**: 75%
-
-**Ready for**: Balance testing, data seeding, and beginning Milestone 2 planning.
+## Technical Details
+- **Framework**: .NET 9
+- **UI Framework**: WPF (Windows Presentation Foundation)
+- **Database**: SQLite 3 with Microsoft.Data.Sqlite
+- **Language**: C# 13
+- **Build Status**: Clean build, 0 warnings, 0 errors
 
 ---
 
-*Created: 2026-01-02*
+*Last Updated: 2026-02-07*

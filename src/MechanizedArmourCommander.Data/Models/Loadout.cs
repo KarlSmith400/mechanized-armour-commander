@@ -9,6 +9,8 @@ public class Loadout
     public int InstanceId { get; set; }
     public string HardpointSlot { get; set; } = string.Empty; // small_1, medium_2, large_1, etc.
     public int WeaponId { get; set; }
+    public int WeaponGroup { get; set; } = 1;                  // Fire group 1-4
+    public string MountLocation { get; set; } = string.Empty;  // Where on the frame (LeftArm, RightTorso, etc.)
 
     // Navigation properties
     public FrameInstance? Frame { get; set; }

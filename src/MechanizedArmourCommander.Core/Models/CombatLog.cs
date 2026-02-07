@@ -32,7 +32,10 @@ public class CombatEvent
     public int? DefenderId { get; set; }
     public string? DefenderName { get; set; }
     public int? Damage { get; set; }
-    public string? HitLocation { get; set; }
+    public int? ArmorDamage { get; set; }
+    public int? StructureDamage { get; set; }
+    public HitLocation? TargetLocation { get; set; }
+    public ComponentDamageType? ComponentEffect { get; set; }
     public bool IsCritical { get; set; }
 }
 
@@ -46,8 +49,15 @@ public enum CombatEventType
     Hit,
     Miss,
     Critical,
-    HeatUpdate,
-    AmmoUpdate,
+    ComponentDamage,
+    AmmoExplosion,
+    ReactorOverload,
+    ReactorShutdown,
+    ReactorVent,
+    LocationDestroyed,
+    DamageTransfer,
+    Brace,
+    Overwatch,
     FrameDestroyed,
     PilotCheck,
     RoundSummary

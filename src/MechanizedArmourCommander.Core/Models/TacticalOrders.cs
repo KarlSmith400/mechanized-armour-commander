@@ -7,8 +7,8 @@ public class TacticalOrders
 {
     public Stance Stance { get; set; } = Stance.Balanced;
     public TargetPriority TargetPriority { get; set; } = TargetPriority.ThreatPriority;
-    public Formation Formation { get; set; } = Formation.Tight;
     public WithdrawalThreshold WithdrawalThreshold { get; set; } = WithdrawalThreshold.FightToEnd;
+    public RangeBand PreferredRange { get; set; } = RangeBand.Medium;
 }
 
 /// <summary>
@@ -30,16 +30,6 @@ public enum TargetPriority
     SpreadDamage,   // Distribute fire across multiple targets
     ThreatPriority, // Target heaviest/most dangerous first
     Opportunity     // Target weakest/most damaged first
-}
-
-/// <summary>
-/// Determines unit positioning
-/// </summary>
-public enum Formation
-{
-    Tight,     // Stay close for mutual support
-    Spread,    // Disperse to avoid concentrated fire
-    Flanking   // Attempt to surround enemy
 }
 
 /// <summary>

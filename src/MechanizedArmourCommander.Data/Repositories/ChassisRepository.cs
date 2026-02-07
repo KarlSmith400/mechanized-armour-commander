@@ -69,10 +69,13 @@ public class ChassisRepository
 
         command.CommandText = @"
             INSERT INTO Chassis (Designation, Name, Class, HardpointSmall, HardpointMedium,
-                                HardpointLarge, HeatCapacity, AmmoCapacity, ArmorPoints,
-                                BaseSpeed, BaseEvasion)
+                                HardpointLarge, ReactorOutput, MovementEnergyCost, TotalSpace,
+                                MaxArmorTotal, StructureHead, StructureCenterTorso, StructureSideTorso,
+                                StructureArm, StructureLegs, BaseSpeed, BaseEvasion, FactionId)
             VALUES (@designation, @name, @class, @hpSmall, @hpMedium, @hpLarge,
-                   @heat, @ammo, @armor, @speed, @evasion);
+                   @reactor, @moveCost, @space, @maxArmor,
+                   @strHead, @strCT, @strST, @strArm, @strLegs,
+                   @speed, @evasion, @factionId);
             SELECT last_insert_rowid();
         ";
 
@@ -82,11 +85,18 @@ public class ChassisRepository
         command.Parameters.AddWithValue("@hpSmall", chassis.HardpointSmall);
         command.Parameters.AddWithValue("@hpMedium", chassis.HardpointMedium);
         command.Parameters.AddWithValue("@hpLarge", chassis.HardpointLarge);
-        command.Parameters.AddWithValue("@heat", chassis.HeatCapacity);
-        command.Parameters.AddWithValue("@ammo", chassis.AmmoCapacity);
-        command.Parameters.AddWithValue("@armor", chassis.ArmorPoints);
+        command.Parameters.AddWithValue("@reactor", chassis.ReactorOutput);
+        command.Parameters.AddWithValue("@moveCost", chassis.MovementEnergyCost);
+        command.Parameters.AddWithValue("@space", chassis.TotalSpace);
+        command.Parameters.AddWithValue("@maxArmor", chassis.MaxArmorTotal);
+        command.Parameters.AddWithValue("@strHead", chassis.StructureHead);
+        command.Parameters.AddWithValue("@strCT", chassis.StructureCenterTorso);
+        command.Parameters.AddWithValue("@strST", chassis.StructureSideTorso);
+        command.Parameters.AddWithValue("@strArm", chassis.StructureArm);
+        command.Parameters.AddWithValue("@strLegs", chassis.StructureLegs);
         command.Parameters.AddWithValue("@speed", chassis.BaseSpeed);
         command.Parameters.AddWithValue("@evasion", chassis.BaseEvasion);
+        command.Parameters.AddWithValue("@factionId", (object?)chassis.FactionId ?? DBNull.Value);
 
         return Convert.ToInt32(command.ExecuteScalar());
     }
@@ -95,18 +105,44 @@ public class ChassisRepository
     {
         return new Chassis
         {
-            ChassisId = reader.GetInt32(0),
-            Designation = reader.GetString(1),
-            Name = reader.GetString(2),
-            Class = reader.GetString(3),
-            HardpointSmall = reader.GetInt32(4),
-            HardpointMedium = reader.GetInt32(5),
-            HardpointLarge = reader.GetInt32(6),
-            HeatCapacity = reader.GetInt32(7),
-            AmmoCapacity = reader.GetInt32(8),
-            ArmorPoints = reader.GetInt32(9),
-            BaseSpeed = reader.GetInt32(10),
-            BaseEvasion = reader.GetInt32(11)
+            ChassisId = reader.GetInt32(reader.GetOrdinal("ChassisId")),
+            Designation = reader.GetString(reader.GetOrdinal("Designation")),
+            Name = reader.GetString(reader.GetOrdinal("Name")),
+            Class = reader.GetString(reader.GetOrdinal("Class")),
+            HardpointSmall = reader.GetInt32(reader.GetOrdinal("HardpointSmall")),
+            HardpointMedium = reader.GetInt32(reader.GetOrdinal("HardpointMedium")),
+            HardpointLarge = reader.GetInt32(reader.GetOrdinal("HardpointLarge")),
+            ReactorOutput = reader.GetInt32(reader.GetOrdinal("ReactorOutput")),
+            MovementEnergyCost = reader.GetInt32(reader.GetOrdinal("MovementEnergyCost")),
+            TotalSpace = reader.GetInt32(reader.GetOrdinal("TotalSpace")),
+            MaxArmorTotal = reader.GetInt32(reader.GetOrdinal("MaxArmorTotal")),
+            StructureHead = reader.GetInt32(reader.GetOrdinal("StructureHead")),
+            StructureCenterTorso = reader.GetInt32(reader.GetOrdinal("StructureCenterTorso")),
+            StructureSideTorso = reader.GetInt32(reader.GetOrdinal("StructureSideTorso")),
+            StructureArm = reader.GetInt32(reader.GetOrdinal("StructureArm")),
+            StructureLegs = reader.GetInt32(reader.GetOrdinal("StructureLegs")),
+            BaseSpeed = reader.GetInt32(reader.GetOrdinal("BaseSpeed")),
+            BaseEvasion = reader.GetInt32(reader.GetOrdinal("BaseEvasion")),
+            FactionId = reader.IsDBNull(reader.GetOrdinal("FactionId"))
+                ? null : reader.GetInt32(reader.GetOrdinal("FactionId"))
         };
+    }
+
+    public List<Chassis> GetByFaction(int factionId)
+    {
+        var chassis = new List<Chassis>();
+        var connection = _context.GetConnection();
+        using var command = connection.CreateCommand();
+
+        command.CommandText = "SELECT * FROM Chassis WHERE FactionId = @fid OR FactionId IS NULL ORDER BY Class, Designation";
+        command.Parameters.AddWithValue("@fid", factionId);
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            chassis.Add(MapFromReader(reader));
+        }
+
+        return chassis;
     }
 }
