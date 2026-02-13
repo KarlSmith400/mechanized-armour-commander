@@ -23,6 +23,12 @@ public class Mission
     public string OpponentFactionName { get; set; } = string.Empty;
     public string OpponentFactionColor { get; set; } = string.Empty;
     public string OpponentPrefix { get; set; } = string.Empty;
+
+    // Map size based on difficulty
+    public MapSize MapSize { get; set; } = MapSize.Medium;
+
+    // Landscape determines terrain generation (from planet type)
+    public string Landscape { get; set; } = "Habitable"; // "Habitable" | "Industrial" | "Mining" | "Station" | "Outpost"
 }
 
 /// <summary>

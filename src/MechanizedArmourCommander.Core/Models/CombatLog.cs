@@ -59,6 +59,9 @@ public enum CombatEventType
     Brace,
     Overwatch,
     FrameDestroyed,
+    HeadDestroyed,
+    PilotKilledInCombat,
+    PilotSurvivedHeadHit,
     PilotCheck,
     RoundSummary
 }
@@ -71,5 +74,6 @@ public enum CombatResult
     Victory,
     Defeat,
     Withdrawal,
-    Ongoing
+    Ongoing,
+    Stalemate
 }

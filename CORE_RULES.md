@@ -29,13 +29,13 @@ Each frame has **2 Action Points** per round (reduced to **1 AP** if gyro is dam
 
 | Action        | AP Cost | Description                                      |
 |---------------|---------|--------------------------------------------------|
-| Move          | 1       | Move one range band closer or farther             |
+| Move          | 1       | Move up to HexMovement hexes                      |
 | Fire Group    | 1       | Fire all weapons in one weapon group              |
 | Brace         | 1       | +20% evasion bonus until next round               |
 | Called Shot   | 2       | Target a specific location (-15% accuracy penalty)|
 | Overwatch     | 1       | Queue reaction fire at enemies                    |
 | Vent Reactor  | 1       | Reduce reactor stress                             |
-| Sprint        | 2       | Move two range bands (costs 2x movement energy)   |
+| Sprint        | 2       | Move up to 2x HexMovement hexes (costs 2x energy)|
 
 ### Action Restrictions
 - **Destroyed legs** prevent Move and Sprint actions
@@ -51,6 +51,7 @@ Hit chance is calculated as a percentage (d100 roll-under):
 ```
 HitChance = BaseAccuracy + GunneryBonus - EvasionPenalty + RangeModifier
             - BraceBonus - SensorPenalty - CalledShotPenalty - ActuatorPenalty
+            - TerrainDefenseBonus - LOSPenalty + EquipmentModifier
 ```
 
 **Final hit chance is clamped to [5%, 95%]** — no attack is ever guaranteed or impossible.
@@ -114,8 +115,34 @@ Short-range weapons excel at close quarters but suffer heavily at long range. Lo
 | Sensor damage          | -10%    | Attacker has sensor hit                |
 | Called shot penalty     | -15%    | Attacker is making a called shot       |
 | Arm actuator damage    | -10%    | Per actuator hit on the weapon's arm   |
+| Terrain defense (Forest)| -15%   | Target is on a Forest hex              |
+| Terrain defense (Rocks) | -10%   | Target is on a Rocks hex               |
+| Equipment modifiers    | Varies  | See Section 7.7 Equipment Combat Effects |
 
-### 3.6 Critical Hits
+### 3.6 Line of Sight (LOS) Penalties
+
+Shooting through intervening terrain reduces accuracy. The hex line between attacker and target is traced, and each **intervening hex** (excluding the attacker's and target's own hex) applies a penalty:
+
+| Intervening Terrain | Penalty per Hex |
+|---------------------|-----------------|
+| Forest              | -5%             |
+| Rocks               | -3%             |
+| Open / Rough / Sand | 0%              |
+
+Penalties stack: shooting through 3 Forest hexes applies -15% total LOS penalty.
+
+**Note**: The target's own terrain defense bonus (Section 3.5) is applied separately from LOS penalties. A target standing in Forest behind 2 more Forest hexes would face -15% (cover) + -10% (LOS through 2 Forest) = -25% total terrain-related penalty.
+
+### 3.7 Targeting Display
+
+When selecting an attack target, the UI displays:
+- **LOS line**: Yellow dashed line from attacker to target hex
+- **Intervening terrain**: Orange-highlighted hexes with per-hex penalty text (-5, -3)
+- **Clear hexes**: Small green dots along clear line-of-sight hexes
+- **Hit chance breakdown**: Header bar shows full modifier breakdown (base, gunnery, range, evasion, cover, LOS, etc.)
+- **Crosshair cursor**: Appears when hovering over a valid target
+
+### 3.8 Critical Hits
 
 Any successful hit has a **5% chance** of being a critical hit. Critical hits are cosmetic in the current system (the damage cascade through structure already handles component damage).
 
@@ -174,9 +201,30 @@ When a location is destroyed, overflow damage transfers to an adjacent location:
 
 ### 4.5 Frame Destruction
 
-A frame is **destroyed** when its Center Torso structure reaches 0.
+A frame is **destroyed** when:
+- **Center Torso** structure reaches 0 (reactor breached), OR
+- **Head** is destroyed and pilot fails survival roll (no pilot to control frame)
 
 When a location is destroyed, **all weapons mounted at that location are also destroyed**.
+
+### 4.6 Head Destruction & Pilot Survival
+
+The Head houses the cockpit, sensors, and pilot. Head destruction (5% hit chance, low armor/structure) triggers a special sequence:
+
+1. **Cockpit breached** — all sensors destroyed (permanent -10% accuracy if not already damaged)
+2. **Pilot survival roll** — `50% + (PilotPiloting * 5%)` chance to survive
+   - Piloting 1 = 55% survival, Piloting 3 = 65%, Piloting 5 = 75%
+3. **If pilot survives**:
+   - Pilot is injured (3-10 day recovery post-combat)
+   - Gunnery bonus zeroed (cockpit targeting offline — `PilotGunnery * 2` becomes 0)
+   - Sensor hit applied (-10% all weapons)
+   - Frame continues fighting with heavy accuracy penalties
+4. **If pilot dies**:
+   - Pilot is KIA (permanent loss)
+   - Frame immediately shuts down (out of combat)
+   - Frame is recoverable post-combat (not destroyed like CT breach)
+
+**Called shot to Head** (2 AP, -15% accuracy) is a high-risk assassination play — if the Head goes down, there's a real chance of killing the pilot outright.
 
 ---
 
@@ -187,10 +235,10 @@ When a location is destroyed, **all weapons mounted at that location are also de
 Each round, a frame receives energy equal to its **Effective Reactor Output**:
 
 ```
-EffectiveReactorOutput = ReactorOutput - (ReactorHits * 3)
+EffectiveReactorOutput = ReactorOutput + ReactorBoost - (ReactorHits * 3)
 ```
 
-Minimum effective output is 1.
+Where `ReactorBoost` comes from Cooling Vents equipment (see Section 7.7). Minimum effective output is 1.
 
 ### 5.2 Energy Consumers
 
@@ -224,31 +272,70 @@ Costs 1 AP. Reduces reactor stress by max(2, EffectiveOutput / 4).
 
 ---
 
-## 6. Positioning & Range Bands
+## 6. Hex Grid & Positioning
 
-Combat uses 4 range bands (abstract, not grid-based):
+Combat takes place on a pointy-top hex grid using axial coordinates (q, r).
 
-```
-Point Blank (0) ←→ Short (1) ←→ Medium (2) ←→ Long (3)
-```
+### 6.1 Map Sizes
 
-### 6.1 Movement Rules
+| Mission Difficulty | Map Size | Dimensions |
+|--------------------|----------|------------|
+| 1-2 (Easy)         | Small    | 12 x 10   |
+| 3 (Medium)         | Medium   | 16 x 12   |
+| 4-5 (Hard)         | Large    | 20 x 14   |
 
-- **Move** (1 AP): Shift one band toward or away from enemies
-- **Sprint** (2 AP): Shift two bands in one direction
-- **Hold** (0 AP): Stay at current range (free, no action cost)
-- All frames start at **Long** range
-- Pulling back costs **50% more energy** than advancing
+### 6.2 Terrain Types
+
+The map is procedurally generated with mixed terrain:
+
+| Terrain | Move Cost | Defense Bonus | LOS Penalty | Description                          |
+|---------|-----------|---------------|-------------|--------------------------------------|
+| Open    | 1         | 0%            | 0%          | Standard — no modifiers              |
+| Forest  | 2         | +15%          | -5%/hex     | Trees — cover, slow, blocks sight    |
+| Rocks   | 2         | +10%          | -3%/hex     | Boulders — partial cover, blocks LOS |
+| Rough   | 2         | 0%            | 0%          | Broken ground — slow only            |
+| Sand    | 1         | 0%            | 0%          | Cosmetic variant, no effect          |
+
+Terrain is rendered using **Kenney hex tile assets** (pointy-top hex PNGs) for visual clarity.
+
+Terrain is scattered procedurally (~12% Forest in clusters, ~10% Rocks, ~8% Rough). Deployment zones (first/last 2 columns) are always kept as Open terrain for fair starts.
+
+### 6.3 Deployment Phase
+
+Before combat begins, a **Deployment Phase** allows unit placement:
+
+1. **Enemy auto-deploy**: AI forces are placed automatically in the rightmost 2 columns
+2. **Player manual deploy**: Player selects each frame and clicks a hex in the leftmost 2 columns (deployment zone, highlighted in blue)
+3. **Start combat**: Once all player frames are placed, the START COMBAT button activates
+4. Player may RESET DEPLOYMENT to reposition all frames
+
+### 6.4 Hex Movement
+
+Each frame class has a fixed hex movement range per Move action:
+
+| Class   | HexMovement | Sprint Range | Move Energy | Sprint Energy |
+|---------|-------------|--------------|-------------|---------------|
+| Light   | 4           | 8            | 2-3         | 4-6           |
+| Medium  | 3           | 6            | 4-5         | 8-10          |
+| Heavy   | 2           | 4            | 7-8         | 14-16         |
+| Assault | 1           | 2            | 10-12       | 20-24         |
+
+- **Move** (1 AP): Move up to HexMovement hexes (terrain costs deducted per hex entered)
+- **Sprint** (2 AP): Move up to 2x HexMovement hexes (costs 2x movement energy)
 - Destroyed legs prevent all movement
+- Terrain move cost is deducted when **entering** a hex (Forest/Rocks/Rough cost 2 movement instead of 1)
 
-### 6.2 Movement Energy Costs by Class
+### 6.5 Distance-Based Accuracy
 
-| Class   | Typical Move Cost | Sprint Cost | Pull Back Cost |
-|---------|-------------------|-------------|----------------|
-| Light   | 2-3               | 4-6         | 3-5            |
-| Medium  | 4-5               | 8-10        | 6-8            |
-| Heavy   | 7-8               | 14-16       | 11-12          |
-| Assault | 10-12             | 20-24       | 15-18          |
+Weapon effectiveness scales with hex distance between attacker and target:
+
+| Weapon Range | Optimal Hexes | Max Range | Modifier at Optimal | Modifier at Max |
+|--------------|---------------|-----------|---------------------|-----------------|
+| Short        | 2-4           | 7         | +10%                | -25%            |
+| Medium       | 4-7           | 10        | +10%                | -10%            |
+| Long         | 7-10          | 14        | +10%                | -5%             |
+
+### 6.6 Movement Energy Costs by Class
 
 The energy trade-off is core to class identity:
 - **Lights** can move and fire freely (2-3 energy to move, 10-12 total energy)
@@ -286,15 +373,87 @@ Group assignment is part of the loadout configuration. Players decide which weap
 | Ballistic | Low (1-2)   | Yes   | Low energy cost but limited ammo       |
 | Missile   | Low (1-2)   | Yes   | Low energy cost but limited ammo       |
 
-**Ammo**: Ballistic and Missile weapons have limited shots. Each weapon starts combat with **8 reloads** worth of ammo (AmmoPerShot * 8). Running dry means the weapon can no longer fire.
+**Ammo**: Ballistic and Missile weapons have limited shots. Each weapon starts combat with **8 reloads** worth of ammo (AmmoPerShot * 8), plus bonus reloads from Ammo Bin equipment. Running dry means the weapon can no longer fire.
 
 ### 7.4 Space Budget
 
-Each chassis has a TotalSpace value. Each weapon has a SpaceCost. The sum of equipped weapon space costs must not exceed the chassis TotalSpace.
+Each chassis has a TotalSpace value. Weapons and equipment both have a SpaceCost. The sum of all equipped weapon and equipment space costs must not exceed the chassis TotalSpace.
 
 ### 7.5 Weapon Mount Locations
 
 Weapons are mounted at specific body locations (LeftArm, RightArm, LeftTorso, RightTorso, CenterTorso, Head). If that location is destroyed, the weapon is destroyed with it.
+
+### 7.6 Equipment System
+
+Equipment provides passive bonuses, active abilities, or slot-based augments that compete with weapons for space budget.
+
+#### 7.6.1 Equipment Categories
+
+| Category | Hardpoint | Activation | Description |
+|----------|-----------|------------|-------------|
+| Passive  | None      | Always on  | Permanent bonuses, no energy cost |
+| Active   | None      | Manual     | Costs AP + energy to activate (future) |
+| Slot     | Required  | Always on  | Occupies a hardpoint slot like a weapon |
+
+#### 7.6.2 Equipment List
+
+**Passive Equipment** (no hardpoint required):
+
+| Equipment       | Space | Effect                                       | Cost    |
+|-----------------|-------|----------------------------------------------|---------|
+| Cooling Vents   | 3     | +3 effective reactor output                  | 15,000  |
+| Reactive Armor  | 5     | 15% structure damage reduction               | 25,000  |
+| Ammo Bin        | 4     | +4 bonus reloads per ammo type               | 12,000  |
+| Gyro Stabilizer | 3     | -10% target evasion (attacker benefit)       | 18,000  |
+
+**Active Equipment** (no hardpoint required):
+
+| Equipment           | Space | Energy | Effect                               | Cost    |
+|---------------------|-------|--------|--------------------------------------|---------|
+| Thrust Pack         | 4     | 3      | Jump 3 hexes (ignores terrain)       | 20,000  |
+| Countermeasure Suite | 3    | 2      | -20% accuracy for incoming fire      | 22,000  |
+| Targeting Uplink    | 2     | 2      | +15% accuracy for allies near target | 28,000  |
+| Barrier Projector   | 5     | 4      | +20 temporary armor to adjacent ally | 35,000  |
+
+**Slot Equipment** (requires matching hardpoint):
+
+| Equipment            | Size   | Space | Effect                                           | Cost    |
+|----------------------|--------|-------|--------------------------------------------------|---------|
+| Sensor Array         | Small  | 2     | +10% accuracy at Long range                      | 16,000  |
+| Point Defense System | Small  | 3     | 50% chance to intercept incoming missiles        | 24,000  |
+| Phantom Emitter      | Medium | 4     | -25% accuracy for attackers beyond 5 hexes       | 30,000  |
+| Stealth Plating      | Large  | 8     | -20% accuracy for all attackers, -1 hex movement | 40,000  |
+
+#### 7.6.3 Equipment in Combat
+
+Equipment modifiers are applied as a net accuracy bonus/penalty:
+
+| Effect          | Source           | Modifier | Condition                              |
+|-----------------|------------------|----------|----------------------------------------|
+| EvasionReduction| Gyro Stabilizer  | +10%     | Always (attacker has equipment)        |
+| LongRangeBonus  | Sensor Array     | +10%     | Attacker fires Long-range weapon       |
+| StealthPlating  | Stealth Plating  | -20%     | Target has equipment                   |
+| RangedECM       | Phantom Emitter  | -25%     | Target has equipment, attacker > 5 hex |
+| ECM             | Countermeasure   | -20%     | Target has activated ECM               |
+| MissileDefense  | Point Defense    | 50% miss | Target has equipment, missile weapon hit|
+| DamageReduction | Reactive Armor   | -15% dmg | Structure damage reduced (min 1)       |
+
+**Point Defense System**: When a missile weapon scores a hit, the target rolls a 50% intercept chance. If intercepted, the hit is negated entirely (no damage applied).
+
+**Reactive Armor**: When damage penetrates armor and hits structure, structure damage is reduced by 15% (minimum 1 damage).
+
+**Stealth Plating**: Also reduces frame hex movement by 1 (e.g., Light moves 3 instead of 4).
+
+**Ammo Bin**: Adds 4 extra reloads per ammo-consuming weapon type at combat start (Ballistic and Missile weapons benefit).
+
+### 7.7 Refit Costs
+
+Changing a frame's loadout in the Refit Bay costs time and credits:
+
+- **500 credits** per weapon or equipment change (install or removal)
+- **1 day** per weapon or equipment change
+- Changes are staged and previewed before confirmation (CONFIRM REFIT / RESET)
+- The visual Refit Bay shows a mech diagram with body locations — click a location to equip a weapon or slot equipment from inventory
 
 ---
 
@@ -336,7 +495,7 @@ Each chassis has fixed internal structure per location. Structure cannot be repa
 | Skill    | Effect                                         | Range |
 |----------|-------------------------------------------------|-------|
 | Gunnery  | +2% accuracy per point                          | 1-5   |
-| Piloting | Tiebreaker for initiative order                 | 1-5   |
+| Piloting | Initiative tiebreaker, +5% head survival per pt | 1-5   |
 | Tactics  | (Reserved for future use)                       | 1-5   |
 
 ### 9.2 Pilot Status
@@ -424,21 +583,72 @@ After combat, weapons from destroyed enemy frames can be salvaged. The salvage p
 ## 13. Campaign Loop
 
 ```
-Management Hub → Select Mission → Deploy Lance (1-4 frames) → Combat → Post-Combat Results → Management Hub
+Management Hub → Galaxy Travel → Select Mission → Deploy Lance (1-4 frames) → Deployment Phase → Combat → Post-Combat Results → Management Hub
 ```
 
 ### 13.1 Between Missions
 
-- Advance Day: ticks injury recovery timers and repair timers
-- Repair damaged frames (costs credits, instant)
+- Advance Day: ticks injury recovery timers, repair timers, deducts daily maintenance
+- Repair damaged frames (costs credits, takes 1-7 days; rush at 2x cost for half time)
 - Buy/sell frames
 - Hire pilots, assign pilots to frames
-- Refit weapons from inventory onto frames
-- Select next mission contract
+- Refit weapons and equipment in the Refit Bay (costs 500 credits + 1 day per change)
+- Buy/sell equipment from Market and Inventory
+- Travel between planets and star systems via the Galaxy tab
+- Select next mission contract (biased to current system's controlling faction)
 
 ### 13.2 Starting Conditions
 
 - Credits: 500,000
 - Company: "Iron Wolves"
+- Starting location: Crossroads system, Junction Station
+- Starting fuel: 50 / 100
 - Starting frames: 2 (1 Medium, 1 Light)
 - Starting pilots: 4
+
+---
+
+## 14. Galaxy Travel
+
+### 14.1 Star Systems
+
+Human space spans 11 star systems connected by jump gates. Each system is controlled by a faction or contested.
+
+| System | Faction | Type | Description |
+|--------|---------|------|-------------|
+| Sol | Directorate | Core | Capital, High Command |
+| Terra Nova | Directorate | Core | Military shipyards |
+| Centauri Gate | Directorate | Colony | Border garrison |
+| Avalon | Crucible | Colony | Crucible HQ, Foundry Station |
+| Forge | Crucible | Colony | Weapons manufacturing |
+| Meridian | Crucible | Colony | R&D, backdoor to Sol |
+| Haven | Outer Reach | Frontier | Diplomatic hub |
+| The Drift | Outer Reach | Frontier | Mobile capital |
+| Rimward | Outer Reach | Frontier | Deep fringe, salvage |
+| Crossroads | Contested | Contested | Border nexus, player start |
+| Deadlight | Contested | Contested | Pirate haven, black market |
+
+### 14.2 Planets & Stations
+
+Each system contains 2-4 planets or stations. Locations offer:
+- **Market**: Buy/sell weapons, equipment, chassis, and fuel
+- **Hiring**: Recruit new pilots
+- **Contracts**: Mission difficulty range varies by location (e.g., core capitals offer Difficulty 3-5)
+
+### 14.3 Travel Mechanics
+
+| Travel Type | Fuel Cost | Time | Notes |
+|-------------|-----------|------|-------|
+| Intra-system | 5 fuel | 1 day | Move between planets in same system |
+| Inter-system jump | 10-20 fuel | 2-4 days | Varies by jump route distance |
+
+- **Fuel capacity**: 100 units maximum
+- **Fuel price**: $500 per unit at any market
+- **Travel advances time**: triggers daily maintenance, repair ticks, injury recovery
+
+### 14.4 Location-Based Contracts
+
+- Faction-controlled systems: 80% chance employer is the controlling faction
+- Contested systems: any faction can post contracts
+- Deeper in faction territory = higher difficulty range available
+- Missions regenerate when you arrive at a new location

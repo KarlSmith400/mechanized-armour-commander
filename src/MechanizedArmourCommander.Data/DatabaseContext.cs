@@ -10,7 +10,7 @@ public class DatabaseContext : IDisposable
 {
     private readonly string _connectionString;
     private SqliteConnection? _connection;
-    private const int SchemaVersion = 5; // Increment when schema changes
+    private const int SchemaVersion = 7; // Increment when schema changes
 
     public string DatabasePath { get; }
 
@@ -58,7 +58,7 @@ public class DatabaseContext : IDisposable
             connection.Open();
 
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT Credits, Reputation, MissionsCompleted, MissionsWon, CompanyName, CurrentDay FROM PlayerState LIMIT 1";
+            command.CommandText = "SELECT Credits, Reputation, MissionsCompleted, MissionsWon, CompanyName, CurrentDay, CurrentSystemId, CurrentPlanetId, Fuel FROM PlayerState LIMIT 1";
             using var reader = command.ExecuteReader();
             if (!reader.Read()) return null;
 
@@ -69,7 +69,10 @@ public class DatabaseContext : IDisposable
                 MissionsCompleted = reader.GetInt32(reader.GetOrdinal("MissionsCompleted")),
                 MissionsWon = reader.GetInt32(reader.GetOrdinal("MissionsWon")),
                 CompanyName = reader.GetString(reader.GetOrdinal("CompanyName")),
-                CurrentDay = reader.GetInt32(reader.GetOrdinal("CurrentDay"))
+                CurrentDay = reader.GetInt32(reader.GetOrdinal("CurrentDay")),
+                CurrentSystemId = reader.GetInt32(reader.GetOrdinal("CurrentSystemId")),
+                CurrentPlanetId = reader.GetInt32(reader.GetOrdinal("CurrentPlanetId")),
+                Fuel = reader.GetInt32(reader.GetOrdinal("Fuel"))
             };
         }
         catch
@@ -97,6 +100,12 @@ public class DatabaseContext : IDisposable
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
+            DROP TABLE IF EXISTS JumpRoute;
+            DROP TABLE IF EXISTS Planet;
+            DROP TABLE IF EXISTS StarSystem;
+            DROP TABLE IF EXISTS EquipmentInventory;
+            DROP TABLE IF EXISTS EquipmentLoadout;
+            DROP TABLE IF EXISTS Equipment;
             DROP TABLE IF EXISTS FactionStanding;
             DROP TABLE IF EXISTS Faction;
             DROP TABLE IF EXISTS Inventory;
@@ -237,7 +246,10 @@ public class DatabaseContext : IDisposable
                 MissionsCompleted INTEGER NOT NULL,
                 MissionsWon INTEGER NOT NULL,
                 CompanyName TEXT NOT NULL,
-                CurrentDay INTEGER NOT NULL
+                CurrentDay INTEGER NOT NULL,
+                CurrentSystemId INTEGER NOT NULL DEFAULT 10,
+                CurrentPlanetId INTEGER NOT NULL DEFAULT 21,
+                Fuel INTEGER NOT NULL DEFAULT 50
             );
 
             -- Inventory table (company weapon storage)
@@ -245,6 +257,75 @@ public class DatabaseContext : IDisposable
                 InventoryId INTEGER PRIMARY KEY AUTOINCREMENT,
                 WeaponId INTEGER NOT NULL,
                 FOREIGN KEY (WeaponId) REFERENCES Weapon(WeaponId)
+            );
+
+            -- Equipment definition table
+            CREATE TABLE IF NOT EXISTS Equipment (
+                EquipmentId INTEGER PRIMARY KEY AUTOINCREMENT,
+                Name TEXT NOT NULL,
+                Category TEXT NOT NULL,
+                HardpointSize TEXT,
+                SpaceCost INTEGER NOT NULL,
+                EnergyCost INTEGER NOT NULL,
+                Effect TEXT NOT NULL,
+                EffectValue INTEGER NOT NULL,
+                PurchaseCost INTEGER NOT NULL,
+                SalvageValue INTEGER NOT NULL,
+                Description TEXT
+            );
+
+            -- Equipment loadout (equipped on frames)
+            CREATE TABLE IF NOT EXISTS EquipmentLoadout (
+                EquipmentLoadoutId INTEGER PRIMARY KEY AUTOINCREMENT,
+                InstanceId INTEGER NOT NULL,
+                EquipmentId INTEGER NOT NULL,
+                HardpointSlot TEXT,
+                FOREIGN KEY (InstanceId) REFERENCES FrameInstance(InstanceId),
+                FOREIGN KEY (EquipmentId) REFERENCES Equipment(EquipmentId)
+            );
+
+            -- Equipment inventory (company storage)
+            CREATE TABLE IF NOT EXISTS EquipmentInventory (
+                EquipmentInventoryId INTEGER PRIMARY KEY AUTOINCREMENT,
+                EquipmentId INTEGER NOT NULL,
+                FOREIGN KEY (EquipmentId) REFERENCES Equipment(EquipmentId)
+            );
+
+            -- Star system table
+            CREATE TABLE IF NOT EXISTS StarSystem (
+                SystemId INTEGER PRIMARY KEY AUTOINCREMENT,
+                Name TEXT NOT NULL,
+                X REAL NOT NULL,
+                Y REAL NOT NULL,
+                ControllingFactionId INTEGER,
+                SystemType TEXT NOT NULL,
+                Description TEXT NOT NULL,
+                FOREIGN KEY (ControllingFactionId) REFERENCES Faction(FactionId)
+            );
+
+            -- Planet/station table
+            CREATE TABLE IF NOT EXISTS Planet (
+                PlanetId INTEGER PRIMARY KEY AUTOINCREMENT,
+                SystemId INTEGER NOT NULL,
+                Name TEXT NOT NULL,
+                PlanetType TEXT NOT NULL,
+                Description TEXT NOT NULL,
+                HasMarket INTEGER NOT NULL DEFAULT 1,
+                HasHiring INTEGER NOT NULL DEFAULT 0,
+                ContractDifficultyMin INTEGER NOT NULL DEFAULT 1,
+                ContractDifficultyMax INTEGER NOT NULL DEFAULT 3,
+                FOREIGN KEY (SystemId) REFERENCES StarSystem(SystemId)
+            );
+
+            -- Jump route table (bidirectional connections between systems)
+            CREATE TABLE IF NOT EXISTS JumpRoute (
+                RouteId INTEGER PRIMARY KEY AUTOINCREMENT,
+                FromSystemId INTEGER NOT NULL,
+                ToSystemId INTEGER NOT NULL,
+                Distance INTEGER NOT NULL,
+                TravelDays INTEGER NOT NULL,
+                FOREIGN KEY (FromSystemId) REFERENCES StarSystem(SystemId),
+                FOREIGN KEY (ToSystemId) REFERENCES StarSystem(SystemId)
             );
         ";
 

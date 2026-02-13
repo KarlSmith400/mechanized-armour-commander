@@ -3,19 +3,18 @@ using MechanizedArmourCommander.Core.Models;
 namespace MechanizedArmourCommander.Core.Combat;
 
 /// <summary>
-/// AI decision-making system for combat frame actions
+/// AI decision-making system for hex grid combat
 /// </summary>
 public class CombatAI
 {
     private readonly Random _random = new();
     private readonly PositioningSystem _positioning = new();
-    private readonly ReactorSystem _reactor = new();
 
     /// <summary>
-    /// Generates AI actions for a frame based on tactical orders and combat state
+    /// Generates AI actions for a frame on the hex grid
     /// </summary>
-    public FrameActions GenerateActions(CombatFrame frame, List<CombatFrame> enemies,
-        TacticalOrders orders, ActionSystem actionSystem)
+    public FrameActions GenerateHexActions(CombatFrame frame, List<CombatFrame> enemies,
+        TacticalOrders orders, ActionSystem actionSystem, HexGrid grid)
     {
         var actions = new FrameActions();
 
@@ -26,138 +25,182 @@ public class CombatAI
         if (!activeEnemies.Any())
             return actions;
 
-        // Select target
         var target = SelectTarget(frame, activeEnemies, orders.TargetPriority);
         actions.FocusTargetId = target.InstanceId;
 
-        // Determine optimal range for this frame's loadout
-        var optimalRange = DetermineOptimalRange(frame, orders);
+        int optimalDist = DetermineOptimalDistance(frame, orders);
 
-        // Decide actions based on stance and situation
         switch (orders.Stance)
         {
             case Stance.Aggressive:
-                PlanAggressiveActions(frame, actions, optimalRange, actionSystem);
+                PlanAggressiveHexActions(frame, actions, target, optimalDist, actionSystem, grid);
                 break;
             case Stance.Defensive:
-                PlanDefensiveActions(frame, actions, optimalRange, actionSystem);
+                PlanDefensiveHexActions(frame, actions, target, optimalDist, actionSystem, grid);
                 break;
             default:
-                PlanBalancedActions(frame, actions, optimalRange, actionSystem);
+                PlanBalancedHexActions(frame, actions, target, optimalDist, actionSystem, grid);
                 break;
         }
 
         return actions;
     }
 
-    private void PlanAggressiveActions(CombatFrame frame, FrameActions actions,
-        RangeBand optimalRange, ActionSystem actionSystem)
+    private void PlanAggressiveHexActions(CombatFrame frame, FrameActions actions,
+        CombatFrame target, int optimalDist, ActionSystem actionSystem, HexGrid grid)
     {
-        // Plan based on MaxActionPoints (AP will be refreshed before execution)
         int availableAP = frame.MaxActionPoints;
 
-        // Aggressive: close to optimal range, then fire everything possible
-        if (frame.CurrentRange > optimalRange && availableAP >= 1
+        int currentDist = HexCoord.Distance(frame.HexPosition, target.HexPosition);
+
+        // Move toward target if not at optimal distance
+        if (currentDist > optimalDist + 1 && availableAP >= 1
             && !frame.DestroyedLocations.Contains(HitLocation.Legs))
         {
-            actions.Actions.Add(new PlannedAction
+            var moveDest = ChooseMoveDestination(frame, target, grid, optimalDist, false);
+            if (moveDest.HasValue)
             {
-                Action = CombatAction.Move,
-                MoveDirection = MovementDirection.Close
-            });
-            availableAP--;
+                actions.Actions.Add(new PlannedAction
+                {
+                    Action = CombatAction.Move,
+                    TargetHex = moveDest.Value
+                });
+                availableAP--;
+            }
         }
 
-        // Fire weapon groups with remaining AP
-        FillRemainingAPWithFire(frame, actions, ref availableAP);
+        // Fire with remaining AP
+        FillRemainingAPWithFire(frame, actions, ref availableAP, target, grid);
     }
 
-    private void PlanDefensiveActions(CombatFrame frame, FrameActions actions,
-        RangeBand optimalRange, ActionSystem actionSystem)
+    private void PlanDefensiveHexActions(CombatFrame frame, FrameActions actions,
+        CombatFrame target, int optimalDist, ActionSystem actionSystem, HexGrid grid)
     {
         int availableAP = frame.MaxActionPoints;
-
-        // Defensive: brace if damaged, pull back if too close, conserve energy
         bool heavilyDamaged = frame.ArmorPercent < 40;
 
+        int currentDist = HexCoord.Distance(frame.HexPosition, target.HexPosition);
+
+        // Brace if heavily damaged
         if (heavilyDamaged && availableAP >= 1)
         {
             actions.Actions.Add(new PlannedAction { Action = CombatAction.Brace });
             availableAP--;
         }
-        else if (frame.CurrentRange < optimalRange && availableAP >= 1
+        // Pull back if too close
+        else if (currentDist < optimalDist - 1 && availableAP >= 1
             && !frame.DestroyedLocations.Contains(HitLocation.Legs))
         {
-            actions.Actions.Add(new PlannedAction
+            var moveDest = ChooseMoveDestination(frame, target, grid, optimalDist, false);
+            if (moveDest.HasValue)
             {
-                Action = CombatAction.Move,
-                MoveDirection = MovementDirection.PullBack
-            });
-            availableAP--;
+                actions.Actions.Add(new PlannedAction
+                {
+                    Action = CombatAction.Move,
+                    TargetHex = moveDest.Value
+                });
+                availableAP--;
+            }
         }
 
         // Vent reactor if stressed
-        if (frame.ReactorStress > frame.EffectiveReactorOutput / 2
-            && availableAP >= 1)
+        if (frame.ReactorStress > frame.EffectiveReactorOutput / 2 && availableAP >= 1)
         {
             actions.Actions.Add(new PlannedAction { Action = CombatAction.VentReactor });
             availableAP--;
         }
 
-        // Fire weapon groups with remaining AP
-        FillRemainingAPWithFire(frame, actions, ref availableAP);
+        FillRemainingAPWithFire(frame, actions, ref availableAP, target, grid);
     }
 
-    private void PlanBalancedActions(CombatFrame frame, FrameActions actions,
-        RangeBand optimalRange, ActionSystem actionSystem)
+    private void PlanBalancedHexActions(CombatFrame frame, FrameActions actions,
+        CombatFrame target, int optimalDist, ActionSystem actionSystem, HexGrid grid)
     {
         int availableAP = frame.MaxActionPoints;
+        int currentDist = HexCoord.Distance(frame.HexPosition, target.HexPosition);
 
-        // Balanced: move toward optimal range if needed, then fire
-        bool needsToMove = frame.CurrentRange != optimalRange
-            && !frame.DestroyedLocations.Contains(HitLocation.Legs);
-
-        // Vent if reactor stress is getting dangerous
+        // Vent if reactor stress is high
         if (frame.ReactorStress >= frame.EffectiveReactorOutput * 0.75)
         {
             actions.Actions.Add(new PlannedAction { Action = CombatAction.VentReactor });
             availableAP--;
         }
-        else if (needsToMove && availableAP >= 1)
+        // Move toward optimal distance if needed
+        else if (Math.Abs(currentDist - optimalDist) > 1 && availableAP >= 1
+            && !frame.DestroyedLocations.Contains(HitLocation.Legs))
         {
-            var direction = frame.CurrentRange > optimalRange
-                ? MovementDirection.Close
-                : MovementDirection.PullBack;
-
-            actions.Actions.Add(new PlannedAction
+            var moveDest = ChooseMoveDestination(frame, target, grid, optimalDist, false);
+            if (moveDest.HasValue)
             {
-                Action = CombatAction.Move,
-                MoveDirection = direction
-            });
-            availableAP--;
+                actions.Actions.Add(new PlannedAction
+                {
+                    Action = CombatAction.Move,
+                    TargetHex = moveDest.Value
+                });
+                availableAP--;
+            }
         }
 
-        // Fire weapon groups with remaining AP
-        FillRemainingAPWithFire(frame, actions, ref availableAP);
+        FillRemainingAPWithFire(frame, actions, ref availableAP, target, grid);
     }
 
     /// <summary>
-    /// Fills remaining AP slots with fire actions, choosing different weapon groups
-    /// to maximize damage output across the round
+    /// Choose the best hex to move to, aiming for optimal distance from target
     /// </summary>
-    private void FillRemainingAPWithFire(CombatFrame frame, FrameActions actions, ref int availableAP)
+    public HexCoord? ChooseMoveDestination(CombatFrame frame, CombatFrame target,
+        HexGrid grid, int optimalDistance, bool isSprint)
+    {
+        int maxRange = isSprint
+            ? PositioningSystem.GetSprintRange(frame)
+            : PositioningSystem.GetEffectiveHexMovement(frame);
+
+        if (maxRange <= 0) return null;
+
+        var reachable = HexPathfinding.GetReachableHexes(grid, frame.HexPosition, maxRange);
+        if (!reachable.Any()) return null;
+
+        HexCoord? best = null;
+        int bestScore = int.MinValue;
+
+        foreach (var hex in reachable)
+        {
+            int dist = HexCoord.Distance(hex, target.HexPosition);
+            int distFromOptimal = Math.Abs(dist - optimalDistance);
+            int score = -distFromOptimal * 10;
+
+            // Small bonus for not being adjacent to multiple enemies
+            // Small penalty for staying at distance 0 from target
+            if (dist == 0) score -= 50;
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = hex;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Fills remaining AP with fire actions, picking best weapon groups
+    /// </summary>
+    private void FillRemainingAPWithFire(CombatFrame frame, FrameActions actions,
+        ref int availableAP, CombatFrame target, HexGrid grid)
     {
         var usedGroups = new HashSet<int>();
+        int hexDistance = HexCoord.Distance(frame.HexPosition, target.HexPosition);
 
         while (availableAP >= 1)
         {
-            var bestGroup = SelectBestWeaponGroup(frame, usedGroups);
+            var bestGroup = SelectBestWeaponGroup(frame, hexDistance, usedGroups);
             if (bestGroup < 0) break;
 
             actions.Actions.Add(new PlannedAction
             {
                 Action = CombatAction.FireGroup,
-                WeaponGroupId = bestGroup
+                WeaponGroupId = bestGroup,
+                TargetFrameId = target.InstanceId
             });
             usedGroups.Add(bestGroup);
             availableAP--;
@@ -165,10 +208,9 @@ public class CombatAI
     }
 
     /// <summary>
-    /// Selects the best weapon group to fire based on energy cost and expected damage.
-    /// Excludes groups already used this round to avoid double-firing the same group.
+    /// Selects the best weapon group to fire based on hex distance and energy cost
     /// </summary>
-    private int SelectBestWeaponGroup(CombatFrame frame, HashSet<int>? excludeGroups = null)
+    private int SelectBestWeaponGroup(CombatFrame frame, int hexDistance, HashSet<int>? excludeGroups = null)
     {
         int bestGroup = -1;
         float bestScore = -1;
@@ -180,6 +222,11 @@ public class CombatAI
             var functionalWeapons = weapons.Where(w => !w.IsDestroyed).ToList();
             if (!functionalWeapons.Any()) continue;
 
+            // Check if any weapon in group can reach
+            bool anyInRange = functionalWeapons.Any(w =>
+                hexDistance <= PositioningSystem.GetWeaponMaxRange(w.RangeClass));
+            if (!anyInRange) continue;
+
             int totalDamage = functionalWeapons.Sum(w => w.Damage);
             int totalEnergyCost = functionalWeapons.Sum(w => w.EnergyCost);
             bool hasAmmo = functionalWeapons.All(w =>
@@ -187,13 +234,12 @@ public class CombatAI
 
             if (!hasAmmo) continue;
 
-            // Score: damage per energy, with a baseline for ammo weapons (which cost no energy)
             float score = totalEnergyCost > 0 ? (float)totalDamage / totalEnergyCost : totalDamage * 2;
 
             // Bonus for range-appropriate weapons
             foreach (var weapon in functionalWeapons)
             {
-                int rangeBonus = _positioning.GetRangeAccuracyModifier(weapon, frame.CurrentRange);
+                int rangeBonus = _positioning.GetHexRangeAccuracyModifier(weapon, hexDistance);
                 score += rangeBonus * 0.5f;
             }
 
@@ -208,6 +254,35 @@ public class CombatAI
     }
 
     /// <summary>
+    /// Determines optimal hex distance based on weapon loadout and stance
+    /// </summary>
+    public int DetermineOptimalDistance(CombatFrame frame, TacticalOrders orders)
+    {
+        int shortDmg = 0, medDmg = 0, longDmg = 0;
+        foreach (var w in frame.FunctionalWeapons)
+        {
+            switch (w.RangeClass)
+            {
+                case "Short": shortDmg += w.Damage; break;
+                case "Medium": medDmg += w.Damage; break;
+                case "Long": longDmg += w.Damage; break;
+            }
+        }
+
+        int optimalDist;
+        if (shortDmg >= medDmg && shortDmg >= longDmg) optimalDist = 3;
+        else if (medDmg >= longDmg) optimalDist = 5;
+        else optimalDist = 8;
+
+        return orders.Stance switch
+        {
+            Stance.Aggressive => Math.Max(1, optimalDist - 2),
+            Stance.Defensive => optimalDist + 2,
+            _ => optimalDist
+        };
+    }
+
+    /// <summary>
     /// Selects the best target based on priority
     /// </summary>
     public CombatFrame SelectTarget(CombatFrame attacker, List<CombatFrame> targets, TargetPriority priority)
@@ -217,48 +292,11 @@ public class CombatAI
 
         return priority switch
         {
-            TargetPriority.FocusFire => SelectFocusFireTarget(targets),
-            TargetPriority.SpreadDamage => SelectSpreadDamageTarget(targets),
-            TargetPriority.ThreatPriority => SelectThreatPriorityTarget(targets),
-            TargetPriority.Opportunity => SelectOpportunityTarget(attacker, targets),
+            TargetPriority.FocusFire => targets.OrderBy(t => t.TotalArmorRemaining).ThenByDescending(t => t.TotalArmorMax).First(),
+            TargetPriority.SpreadDamage => targets.OrderByDescending(t => t.ArmorPercent).First(),
+            TargetPriority.ThreatPriority => targets.OrderByDescending(t => CalculateThreatScore(t)).First(),
+            TargetPriority.Opportunity => targets.OrderByDescending(t => CalculateOpportunityScore(t, attacker)).First(),
             _ => targets.First()
-        };
-    }
-
-    /// <summary>
-    /// Determines optimal range band based on weapon loadout
-    /// </summary>
-    public RangeBand DetermineOptimalRange(CombatFrame frame, TacticalOrders orders)
-    {
-        var rangeScores = new Dictionary<RangeBand, int>
-        {
-            { RangeBand.Short, 0 },
-            { RangeBand.Medium, 0 },
-            { RangeBand.Long, 0 }
-        };
-
-        foreach (var weapon in frame.FunctionalWeapons)
-        {
-            var band = weapon.RangeClass switch
-            {
-                "Short" => RangeBand.Short,
-                "Medium" => RangeBand.Medium,
-                "Long" => RangeBand.Long,
-                _ => RangeBand.Medium
-            };
-            rangeScores[band] += weapon.Damage;
-        }
-
-        var preferred = rangeScores.OrderByDescending(kvp => kvp.Value).First().Key;
-
-        // Stance shifts the preference
-        return orders.Stance switch
-        {
-            Stance.Aggressive when preferred > RangeBand.PointBlank =>
-                (RangeBand)((int)preferred - 1),
-            Stance.Defensive when preferred < RangeBand.Long =>
-                (RangeBand)((int)preferred + 1),
-            _ => preferred
         };
     }
 
@@ -285,33 +323,6 @@ public class CombatAI
         };
     }
 
-    #region Target Selection
-
-    private CombatFrame SelectFocusFireTarget(List<CombatFrame> targets)
-    {
-        // Pick the most damaged enemy that's still a threat
-        return targets
-            .OrderBy(t => t.TotalArmorRemaining)
-            .ThenByDescending(t => t.TotalArmorMax)
-            .First();
-    }
-
-    private CombatFrame SelectSpreadDamageTarget(List<CombatFrame> targets)
-    {
-        // Engage the least damaged target
-        return targets.OrderByDescending(t => t.ArmorPercent).First();
-    }
-
-    private CombatFrame SelectThreatPriorityTarget(List<CombatFrame> targets)
-    {
-        return targets.OrderByDescending(t => CalculateThreatScore(t)).First();
-    }
-
-    private CombatFrame SelectOpportunityTarget(CombatFrame attacker, List<CombatFrame> targets)
-    {
-        return targets.OrderByDescending(t => CalculateOpportunityScore(t, attacker)).First();
-    }
-
     private int CalculateThreatScore(CombatFrame target)
     {
         int score = target.Class switch
@@ -332,7 +343,6 @@ public class CombatAI
     {
         int score = (int)((1.0f - target.ArmorPercent / 100f) * 100);
 
-        // Bonus if we can likely destroy a location
         int totalDamage = attacker.FunctionalWeapons.Sum(w => w.Damage);
         if (totalDamage >= target.TotalArmorRemaining)
             score += 50;
@@ -342,6 +352,4 @@ public class CombatAI
 
         return score;
     }
-
-    #endregion
 }

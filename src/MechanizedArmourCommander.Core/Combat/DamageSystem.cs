@@ -85,6 +85,11 @@ public class DamageSystem
         // Phase 2: Overflow to structure
         if (remainingDamage > 0)
         {
+            // Reactive Armor: reduce structure damage by percentage
+            int damageReduction = target.GetEquipmentValue("DamageReduction");
+            if (damageReduction > 0)
+                remainingDamage = Math.Max(1, remainingDamage - (remainingDamage * damageReduction / 100));
+
             int currentStructure = target.Structure.GetValueOrDefault(location, 0);
             structureDamage = Math.Min(currentStructure, remainingDamage);
             target.Structure[location] = currentStructure - structureDamage;
@@ -144,7 +149,86 @@ public class DamageSystem
                         Message = $"{target.CustomName} DESTROYED! Center torso breached!"
                     });
                 }
+
+                // Head destroyed — pilot survival roll, cockpit/sensors lost
+                if (location == HitLocation.Head)
+                {
+                    var headEvents = ResolveHeadDestruction(target);
+                    events.AddRange(headEvents);
+                }
             }
+        }
+
+        return events;
+    }
+
+    /// <summary>
+    /// Resolves head destruction: pilot survival roll, cockpit/sensor damage, possible frame shutdown
+    /// Survival chance: 50% base + 5% per Piloting skill point
+    /// </summary>
+    private List<CombatEvent> ResolveHeadDestruction(CombatFrame target)
+    {
+        var events = new List<CombatEvent>();
+
+        events.Add(new CombatEvent
+        {
+            Type = CombatEventType.HeadDestroyed,
+            DefenderId = target.InstanceId,
+            DefenderName = target.CustomName,
+            TargetLocation = HitLocation.Head,
+            Message = $"{target.CustomName} HEAD DESTROYED! Cockpit breached!"
+        });
+
+        // Add permanent sensor damage if not already present
+        if (!target.HasSensorHit)
+        {
+            target.DamagedComponents.Add(new ComponentDamage
+            {
+                Location = HitLocation.Head,
+                Type = ComponentDamageType.SensorHit,
+                Description = "Sensors destroyed with head"
+            });
+        }
+
+        // Pilot survival roll: 50% base + 5% per Piloting skill
+        int survivalChance = 50 + (target.PilotPiloting * 5);
+        int roll = _random.Next(100);
+
+        if (roll < survivalChance)
+        {
+            // Pilot survives — injured but alive, frame keeps fighting with heavy penalties
+            events.Add(new CombatEvent
+            {
+                Type = CombatEventType.PilotSurvivedHeadHit,
+                DefenderId = target.InstanceId,
+                DefenderName = target.CustomName,
+                Message = $"{target.PilotCallsign ?? "Pilot"} survives cockpit breach! ({survivalChance}% chance) Injured, sensors destroyed, gunnery systems offline."
+            });
+
+            // Zero out pilot gunnery — cockpit targeting systems are gone
+            target.PilotGunnery = 0;
+        }
+        else
+        {
+            // Pilot killed — frame shuts down immediately
+            target.IsPilotDead = true;
+            target.IsShutDown = true;
+
+            events.Add(new CombatEvent
+            {
+                Type = CombatEventType.PilotKilledInCombat,
+                DefenderId = target.InstanceId,
+                DefenderName = target.CustomName,
+                Message = $"{target.PilotCallsign ?? "Pilot"} KILLED IN ACTION! ({100 - survivalChance}% chance) {target.CustomName} shuts down — no pilot."
+            });
+
+            events.Add(new CombatEvent
+            {
+                Type = CombatEventType.FrameDestroyed,
+                DefenderId = target.InstanceId,
+                DefenderName = target.CustomName,
+                Message = $"{target.CustomName} offline — pilot lost."
+            });
         }
 
         return events;

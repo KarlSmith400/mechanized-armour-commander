@@ -33,7 +33,8 @@ public class PlannedAction
     public CombatAction Action { get; set; }
     public int? WeaponGroupId { get; set; }            // For FireGroup action
     public HitLocation? CalledShotLocation { get; set; } // For CalledShot action
-    public MovementDirection? MoveDirection { get; set; } // For Move/Sprint action
+    public HexCoord? TargetHex { get; set; }           // For hex-based Move/Sprint destination
+    public int? TargetFrameId { get; set; }            // For hex-based Fire target
 }
 
 /// <summary>
@@ -45,7 +46,6 @@ public class RoundSituation
     public List<FrameSituation> PlayerFrames { get; set; } = new();
     public List<FrameSituation> EnemyFrames { get; set; } = new();
     public string LastRoundSummary { get; set; } = string.Empty;
-    public RangeBand CurrentRangeBand { get; set; }
     public int PlayerLosses { get; set; }
     public int EnemyLosses { get; set; }
 }
@@ -74,9 +74,6 @@ public class FrameSituation
 
     // Action points
     public int ActionPoints { get; set; }
-
-    // Range
-    public RangeBand CurrentRange { get; set; }
 
     // Weapon groups with status
     public Dictionary<int, List<WeaponGroupInfo>> WeaponGroups { get; set; } = new();

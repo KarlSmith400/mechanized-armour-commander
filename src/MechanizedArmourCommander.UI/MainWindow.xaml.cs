@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using MechanizedArmourCommander.Core.Combat;
@@ -13,1539 +14,1486 @@ namespace MechanizedArmourCommander.UI;
 
 public partial class MainWindow : Window
 {
+    // Services
     private readonly CombatService _combatService;
     private readonly DatabaseContext _dbContext;
-    private List<CombatFrame> _playerFrames = new();
-    private List<CombatFrame> _enemyFrames = new();
-    private TacticalOrders _playerOrders = new();
-
-    // Playback state (auto-resolve, round-by-round)
-    private DispatcherTimer? _playbackTimer;
-    private CombatRound? _playbackCurrentRound;
-    private int _playbackEventIdx;
-    private int _playbackRoundNumber;
-    private bool _isPlayingBack;
-
-    // Tactical planning state
-    private bool _isTacticalMode;
-    private int _tacticalRound;
-    private int _selectedFrameIdx;
-    private Dictionary<int, List<PlannedAction>> _framePlans = new();
-    private Dictionary<int, int?> _frameFocusTargets = new();
-    private TacticalOrders _enemyOrders = new();
-
-    // Campaign state
-    private bool _isCampaignMode;
-    private Mission? _currentMission;
     private ManagementService? _managementService;
     private MissionService? _missionService;
+
+    // Combat state
+    private CombatState? _combatState;
+    private TacticalOrders _playerOrders = new();
+    private TacticalOrders _enemyOrders = new();
+    private bool _isCampaignMode;
+    private Mission? _currentMission;
+
+    // Hex rendering
+    private double _hexSize;
+    private double _renderOffsetX;
+    private double _renderOffsetY;
+
+    // Terrain tile images keyed by landscape type (cached)
+    private static readonly Dictionary<string, Dictionary<HexTerrain, BitmapImage>> _tileSets = LoadAllTileSets();
+
+    private static Dictionary<string, Dictionary<HexTerrain, BitmapImage>> LoadAllTileSets()
+    {
+        var sets = new Dictionary<string, Dictionary<HexTerrain, BitmapImage>>();
+
+        // Default nature tiles (used for Habitable, Mining, Outpost, etc.)
+        sets["default"] = LoadTileSet(new Dictionary<HexTerrain, string>
+        {
+            { HexTerrain.Open,   "terrain_open.png" },
+            { HexTerrain.Forest, "terrain_forest.png" },
+            { HexTerrain.Rocks,  "terrain_rocks.png" },
+            { HexTerrain.Rough,  "terrain_rough.png" },
+            { HexTerrain.Sand,   "terrain_sand.png" }
+        });
+
+        // Station tiles (extracted from space station tileset)
+        sets["Station"] = LoadTileSet(new Dictionary<HexTerrain, string>
+        {
+            { HexTerrain.Open,  "station_open.png" },
+            { HexTerrain.Rocks, "station_rocks.png" },
+            { HexTerrain.Rough, "station_rough.png" }
+        });
+
+        // Industrial reuses station tiles with nature rocks fallback
+        sets["Industrial"] = LoadTileSet(new Dictionary<HexTerrain, string>
+        {
+            { HexTerrain.Open,  "station_open.png" },
+            { HexTerrain.Rocks, "station_rocks.png" },
+            { HexTerrain.Rough, "station_rough.png" },
+            { HexTerrain.Sand,  "terrain_sand.png" }
+        });
+
+        return sets;
+    }
+
+    private static Dictionary<HexTerrain, BitmapImage> LoadTileSet(Dictionary<HexTerrain, string> mapping)
+    {
+        var tiles = new Dictionary<HexTerrain, BitmapImage>();
+        foreach (var (terrain, file) in mapping)
+        {
+            try
+            {
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = new Uri($"pack://application:,,,/Resources/Hex/{file}");
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                tiles[terrain] = bmp;
+            }
+            catch { /* fallback to polygon rendering if image missing */ }
+        }
+        return tiles;
+    }
+
+    private static Dictionary<HexTerrain, BitmapImage> GetTilesForLandscape(string landscape)
+    {
+        if (_tileSets.TryGetValue(landscape, out var set))
+            return set;
+        return _tileSets["default"];
+    }
+
+    // Player interaction state
+    private CombatAction? _selectedAction;
+    private int? _selectedWeaponGroup;
+    private HashSet<HexCoord> _highlightedMoveHexes = new();
+    private HashSet<HexCoord> _highlightedAttackHexes = new();
+
+    // Targeting cursor state
+    private HexCoord? _hoveredHex;
+    private CombatFrame? _hoveredTarget;
+    private List<HexCoord>? _losLine;
+    private List<(HexCoord coord, int penalty)>? _losInterveningHexes;
+
+    // AI turn animation
+    private DispatcherTimer? _aiTimer;
+    private Queue<CombatEvent>? _aiEventQueue;
+
+    // Deployment phase
+    private CombatFrame? _selectedDeployFrame;
+    private HashSet<HexCoord> _deploymentZoneHexes = new();
 
     public MainWindow(string dbPath)
     {
         InitializeComponent();
-
         _dbContext = new DatabaseContext(dbPath);
-        _dbContext.Initialize();
-
         _combatService = new CombatService();
+
         _managementService = new ManagementService(_dbContext);
         _missionService = new MissionService(_dbContext);
 
-        // Defer HQ window to after MainWindow is shown
-        Loaded += MainWindow_Loaded;
-    }
+        AddHandler(System.Windows.Controls.Primitives.ButtonBase.ClickEvent,
+            new RoutedEventHandler((_, _) => AudioService.PlayClick()));
 
-    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
-    {
-        Loaded -= MainWindow_Loaded;
-        OpenManagementWindow();
+        Loaded += (_, _) => OpenManagementWindow();
     }
 
     protected override void OnClosed(EventArgs e)
     {
-        _dbContext?.Dispose();
         base.OnClosed(e);
+        _dbContext.Dispose();
     }
 
-    #region Initialization & Campaign Flow
+    #region Campaign Flow
 
     private void OpenManagementWindow()
     {
+        this.Hide();
         var mgmtWindow = new ManagementWindow(_dbContext);
         mgmtWindow.Owner = this;
-        this.Hide();
+        mgmtWindow.ShowDialog();
 
-        var result = mgmtWindow.ShowDialog();
-
-        this.Show();
-
-        if (result == true && mgmtWindow.ReturnToMainMenu)
+        if (mgmtWindow.ReturnToMainMenu)
         {
-            // Return to main menu — close MainWindow entirely
-            Close();
+            this.Close();
             return;
         }
 
-        if (result == true && mgmtWindow.LaunchCombat && mgmtWindow.SelectedMission != null)
+        this.Show();
+
+        if (mgmtWindow.LaunchCombat && mgmtWindow.SelectedMission != null)
         {
-            // Campaign deployment
             _isCampaignMode = true;
             _currentMission = mgmtWindow.SelectedMission;
 
-            _playerFrames = _managementService!.BuildCombatFrames(mgmtWindow.DeployedFrameIds);
-            _enemyFrames = _missionService!.BuildEnemyForce(_currentMission);
+            var playerFrames = _managementService!.BuildCombatFrames(mgmtWindow.DeployedFrameIds);
+            var enemyFrames = _missionService!.BuildEnemyForce(_currentMission);
 
-            ClearFeed();
-            AppendFeedLine($"MISSION: {_currentMission.Title}", "#FFAA00", true);
-            AppendFeedLine($"Difficulty: {new string('*', _currentMission.Difficulty)}", "#FF6600");
-            AppendFeedLine("", "#000000");
-            AppendFeedLine("Deploy your lance. Ready for combat.", "#00FF00");
+            AppendFeedText($"CONTRACT: {_currentMission.Title}", "#FFAA00");
+            AppendFeedText($"Employer: {_currentMission.EmployerFactionName} vs {_currentMission.OpponentFactionName}", "#888888");
+            AppendFeedText($"Difficulty: {_currentMission.Difficulty} | Map: {_currentMission.MapSize} | Terrain: {_currentMission.Landscape}", "#888888");
+            AppendFeedText($"Deploying {playerFrames.Count} frames against {enemyFrames.Count} hostiles", "#00CC00");
+            AppendFeedText("", "#000000");
 
-            UpdateFrameLists();
-        }
-        else if (result == true)
-        {
-            // Quick combat (test scenario)
-            _isCampaignMode = false;
-            _currentMission = null;
-            InitializeTestScenario();
-            ClearFeed();
-            DisplayDatabaseStats();
+            // Initialize combat with manual deployment (landscape determines terrain generation)
+            _combatState = _combatService.InitializeCombatForDeployment(playerFrames, enemyFrames, _currentMission.MapSize, _currentMission.Landscape);
+            _deploymentZoneHexes = _combatState.Grid.GetFullDeploymentZone(true);
+            StartCombatButton.IsEnabled = false;
+            StartCombatButton.Opacity = 0.5;
+            UpdateDeploymentUI();
+            RenderFullMap();
         }
         else
         {
-            // Closed without action — return to main menu
-            Close();
+            OpenManagementWindow();
         }
     }
 
     private void HandlePostCombat()
     {
-        if (!_isCampaignMode || _currentMission == null || _managementService == null || _missionService == null)
-            return;
+        if (!_isCampaignMode || _currentMission == null || _combatState == null) return;
 
-        // Determine outcome
-        bool playerAlive = _playerFrames.Any(f => !f.IsDestroyed);
-        bool enemyAlive = _enemyFrames.Any(f => !f.IsDestroyed);
+        var results = _missionService!.ProcessResults(_currentMission, _combatState.Result,
+            _combatState.PlayerFrames, _combatState.EnemyFrames);
 
-        CombatResult outcome = (!playerAlive && !enemyAlive) ? CombatResult.Victory :
-                               !playerAlive ? CombatResult.Defeat :
-                               !enemyAlive ? CombatResult.Victory :
-                               CombatResult.Withdrawal;
+        foreach (var frame in _combatState.PlayerFrames)
+            _managementService!.ApplyPostCombatDamage(frame);
 
-        // Process results
-        var results = _missionService.ProcessResults(_currentMission, outcome, _playerFrames, _enemyFrames);
+        var postCombatWindow = new PostCombatWindow(results, _currentMission, _dbContext);
+        postCombatWindow.Owner = this;
+        postCombatWindow.ShowDialog();
 
-        // Apply damage to persistent frames
-        foreach (var frame in _playerFrames)
-        {
-            _managementService.ApplyPostCombatDamage(frame);
-        }
+        _missionService.ApplyResults(results, _managementService!);
 
-        // Show post-combat window (player picks salvage here)
-        var postCombat = new PostCombatWindow(results, _currentMission, _dbContext);
-        postCombat.Owner = this;
-        postCombat.ShowDialog();
+        _isCampaignMode = false;
+        _currentMission = null;
+        _combatState = null;
+        CombatFeedPanel.Children.Clear();
 
-        // Apply mission results AFTER salvage selection (credits, XP, salvage to inventory)
-        _missionService.ApplyResults(results, _managementService);
-
-        // Return to management
         OpenManagementWindow();
     }
 
-    private void DisplayDatabaseStats()
-    {
-        var chassisRepo = new MechanizedArmourCommander.Data.Repositories.ChassisRepository(_dbContext);
-        var weaponRepo = new MechanizedArmourCommander.Data.Repositories.WeaponRepository(_dbContext);
-
-        var allChassis = chassisRepo.GetAll();
-        var allWeapons = weaponRepo.GetAll();
-
-        AppendFeedLine($"DATABASE INITIALIZED", "#00AA00");
-        AppendFeedLine($"Chassis: {allChassis.Count}  Weapons: {allWeapons.Count}", "#006600");
-        AppendFeedLine("", "#000000");
-        AppendFeedLine("Ready for combat.", "#00FF00");
-    }
-
-    private void InitializeTestScenario()
-    {
-        // Mirror match: both sides get the same frames and weapons for fair AI testing
-        _playerFrames = new List<CombatFrame>
-        {
-            CreateTestFrame(1, "Alpha", "EN-50", "Enforcer", "Medium",
-                reactorOutput: 17, movementEnergyCost: 5, speed: 6, evasion: 15,
-                pilotCallsign: "Razor", gunnery: 5, piloting: 4, tactics: 5,
-                structureHead: 3, structureCT: 8, structureST: 6, structureArm: 4, structureLegs: 6,
-                armorHead: 4, armorCT: 12, armorLT: 8, armorRT: 8, armorLA: 6, armorRA: 6, armorLegs: 10,
-                weapons: new List<(string name, string type, int energy, int ammo, string ammoType, int dmg, string range, int acc, int group, HitLocation mount)>
-                {
-                    ("Medium Laser", "Energy", 6, 0, "", 10, "Medium", 80, 1, HitLocation.RightArm),
-                    ("Autocannon-5", "Ballistic", 1, 5, "AC5", 8, "Long", 80, 2, HitLocation.LeftArm)
-                },
-                ammo: new Dictionary<string, int> { { "AC5", 40 } }),
-
-            CreateTestFrame(2, "Bravo", "WD-60", "Warden", "Heavy",
-                reactorOutput: 20, movementEnergyCost: 6, speed: 4, evasion: 10,
-                pilotCallsign: "Anvil", gunnery: 4, piloting: 3, tactics: 5,
-                structureHead: 4, structureCT: 12, structureST: 8, structureArm: 6, structureLegs: 8,
-                armorHead: 6, armorCT: 16, armorLT: 12, armorRT: 12, armorLA: 8, armorRA: 8, armorLegs: 14,
-                weapons: new List<(string name, string type, int energy, int ammo, string ammoType, int dmg, string range, int acc, int group, HitLocation mount)>
-                {
-                    ("Heavy Laser", "Energy", 12, 0, "", 18, "Long", 75, 1, HitLocation.RightTorso),
-                    ("SRM-6", "Missile", 1, 6, "SRM", 12, "Short", 80, 2, HitLocation.LeftTorso)
-                },
-                ammo: new Dictionary<string, int> { { "SRM", 36 } })
-        };
-
-        _enemyFrames = new List<CombatFrame>
-        {
-            CreateTestFrame(101, "Hostile-1", "EN-50", "Enforcer", "Medium",
-                reactorOutput: 17, movementEnergyCost: 5, speed: 6, evasion: 15,
-                pilotCallsign: null, gunnery: 5, piloting: 4, tactics: 5,
-                structureHead: 3, structureCT: 8, structureST: 6, structureArm: 4, structureLegs: 6,
-                armorHead: 4, armorCT: 12, armorLT: 8, armorRT: 8, armorLA: 6, armorRA: 6, armorLegs: 10,
-                weapons: new List<(string name, string type, int energy, int ammo, string ammoType, int dmg, string range, int acc, int group, HitLocation mount)>
-                {
-                    ("Medium Laser", "Energy", 6, 0, "", 10, "Medium", 80, 1, HitLocation.RightArm),
-                    ("Autocannon-5", "Ballistic", 1, 5, "AC5", 8, "Long", 80, 2, HitLocation.LeftArm)
-                },
-                ammo: new Dictionary<string, int> { { "AC5", 40 } }),
-
-            CreateTestFrame(102, "Hostile-2", "WD-60", "Warden", "Heavy",
-                reactorOutput: 20, movementEnergyCost: 6, speed: 4, evasion: 10,
-                pilotCallsign: null, gunnery: 4, piloting: 3, tactics: 5,
-                structureHead: 4, structureCT: 12, structureST: 8, structureArm: 6, structureLegs: 8,
-                armorHead: 6, armorCT: 16, armorLT: 12, armorRT: 12, armorLA: 8, armorRA: 8, armorLegs: 14,
-                weapons: new List<(string name, string type, int energy, int ammo, string ammoType, int dmg, string range, int acc, int group, HitLocation mount)>
-                {
-                    ("Heavy Laser", "Energy", 12, 0, "", 18, "Long", 75, 1, HitLocation.RightTorso),
-                    ("SRM-6", "Missile", 1, 6, "SRM", 12, "Short", 80, 2, HitLocation.LeftTorso)
-                },
-                ammo: new Dictionary<string, int> { { "SRM", 36 } })
-        };
-
-        UpdateFrameLists();
-    }
-
-    private CombatFrame CreateTestFrame(
-        int id, string name, string designation, string chassisName, string frameClass,
-        int reactorOutput, int movementEnergyCost, int speed, int evasion,
-        string? pilotCallsign, int gunnery, int piloting, int tactics,
-        int structureHead, int structureCT, int structureST, int structureArm, int structureLegs,
-        int armorHead, int armorCT, int armorLT, int armorRT, int armorLA, int armorRA, int armorLegs,
-        List<(string name, string type, int energy, int ammo, string ammoType, int dmg, string range, int acc, int group, HitLocation mount)> weapons,
-        Dictionary<string, int> ammo)
-    {
-        var frame = new CombatFrame
-        {
-            InstanceId = id,
-            CustomName = name,
-            ChassisDesignation = designation,
-            ChassisName = chassisName,
-            Class = frameClass,
-            ReactorOutput = reactorOutput,
-            CurrentEnergy = reactorOutput,
-            ReactorStress = 0,
-            MovementEnergyCost = movementEnergyCost,
-            Speed = speed,
-            Evasion = evasion,
-            PilotCallsign = pilotCallsign,
-            PilotGunnery = gunnery,
-            PilotPiloting = piloting,
-            PilotTactics = tactics,
-            ActionPoints = 2,
-            MaxActionPoints = 2,
-            CurrentRange = RangeBand.Long,
-            Armor = new Dictionary<HitLocation, int>
-            {
-                { HitLocation.Head, armorHead },
-                { HitLocation.CenterTorso, armorCT },
-                { HitLocation.LeftTorso, armorLT },
-                { HitLocation.RightTorso, armorRT },
-                { HitLocation.LeftArm, armorLA },
-                { HitLocation.RightArm, armorRA },
-                { HitLocation.Legs, armorLegs }
-            },
-            MaxArmor = new Dictionary<HitLocation, int>
-            {
-                { HitLocation.Head, armorHead },
-                { HitLocation.CenterTorso, armorCT },
-                { HitLocation.LeftTorso, armorLT },
-                { HitLocation.RightTorso, armorRT },
-                { HitLocation.LeftArm, armorLA },
-                { HitLocation.RightArm, armorRA },
-                { HitLocation.Legs, armorLegs }
-            },
-            Structure = new Dictionary<HitLocation, int>
-            {
-                { HitLocation.Head, structureHead },
-                { HitLocation.CenterTorso, structureCT },
-                { HitLocation.LeftTorso, structureST },
-                { HitLocation.RightTorso, structureST },
-                { HitLocation.LeftArm, structureArm },
-                { HitLocation.RightArm, structureArm },
-                { HitLocation.Legs, structureLegs }
-            },
-            MaxStructure = new Dictionary<HitLocation, int>
-            {
-                { HitLocation.Head, structureHead },
-                { HitLocation.CenterTorso, structureCT },
-                { HitLocation.LeftTorso, structureST },
-                { HitLocation.RightTorso, structureST },
-                { HitLocation.LeftArm, structureArm },
-                { HitLocation.RightArm, structureArm },
-                { HitLocation.Legs, structureLegs }
-            },
-            AmmoByType = new Dictionary<string, int>(ammo)
-        };
-
-        int weaponId = id * 100;
-        foreach (var w in weapons)
-        {
-            if (!frame.WeaponGroups.ContainsKey(w.group))
-                frame.WeaponGroups[w.group] = new List<EquippedWeapon>();
-
-            frame.WeaponGroups[w.group].Add(new EquippedWeapon
-            {
-                WeaponId = weaponId++,
-                Name = w.name,
-                WeaponType = w.type,
-                EnergyCost = w.energy,
-                AmmoPerShot = w.ammo,
-                AmmoType = w.ammoType,
-                Damage = w.dmg,
-                RangeClass = w.range,
-                BaseAccuracy = w.acc,
-                WeaponGroup = w.group,
-                MountLocation = w.mount
-            });
-        }
-
-        return frame;
-    }
-
     #endregion
 
-    #region Combat Feed (colored events)
+    #region Deployment Phase
 
-    private void ClearFeed()
+    private void UpdateDeploymentUI()
     {
-        CombatFeedPanel.Children.Clear();
-    }
+        if (_combatState == null) return;
 
-    private void AppendFeedLine(string text, string colorHex, bool bold = false)
-    {
-        var tb = new TextBlock
-        {
-            Text = text,
-            FontFamily = new FontFamily("Consolas"),
-            FontSize = 11,
-            Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colorHex)),
-            FontWeight = bold ? FontWeights.Bold : FontWeights.Normal,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 0, 0, 1)
-        };
-        CombatFeedPanel.Children.Add(tb);
-        CombatFeedScroller.ScrollToEnd();
-    }
-
-    private void AppendCombatEvent(CombatEvent evt)
-    {
-        string prefix;
-        string color;
-        bool bold = false;
-
-        switch (evt.Type)
-        {
-            case CombatEventType.Movement:
-                prefix = "  "; color = "#558855"; break;
-            case CombatEventType.Hit:
-                prefix = "  > "; color = "#00FF00"; break;
-            case CombatEventType.Miss:
-                prefix = "  > "; color = "#555555"; break;
-            case CombatEventType.Critical:
-                prefix = "  ** "; color = "#FFFF00"; bold = true; break;
-            case CombatEventType.ComponentDamage:
-                prefix = "  ! "; color = "#FFAA00"; break;
-            case CombatEventType.AmmoExplosion:
-                prefix = "  !! "; color = "#FF4400"; bold = true; break;
-            case CombatEventType.LocationDestroyed:
-                prefix = "  >> "; color = "#FF6600"; bold = true; break;
-            case CombatEventType.FrameDestroyed:
-                prefix = "  >>> "; color = "#FF0000"; bold = true; break;
-            case CombatEventType.ReactorOverload:
-            case CombatEventType.ReactorShutdown:
-                prefix = "  ~ "; color = "#FF8800"; break;
-            case CombatEventType.ReactorVent:
-                prefix = "  ~ "; color = "#888800"; break;
-            case CombatEventType.DamageTransfer:
-                prefix = "  -> "; color = "#AA6600"; break;
-            case CombatEventType.Brace:
-            case CombatEventType.Overwatch:
-                prefix = "  "; color = "#4488AA"; break;
-            case CombatEventType.RoundSummary:
-                prefix = "  --- "; color = "#888888"; break;
-            default:
-                prefix = "  "; color = "#00AA00"; break;
-        }
-
-        AppendFeedLine($"{prefix}{evt.Message}", color, bold);
-    }
-
-    private void AppendRoundHeader(int roundNumber)
-    {
-        AppendFeedLine("", "#000000");
-        AppendFeedLine($"===== ROUND {roundNumber} =====", "#00FFFF", true);
-    }
-
-    private void AppendResultBanner(CombatResult result)
-    {
-        AppendFeedLine("", "#000000");
-        switch (result)
-        {
-            case CombatResult.Victory:
-                AppendFeedLine("=== VICTORY ===", "#00FF00", true);
-                break;
-            case CombatResult.Defeat:
-                AppendFeedLine("=== DEFEAT ===", "#FF0000", true);
-                break;
-            case CombatResult.Withdrawal:
-                AppendFeedLine("=== WITHDRAWAL ===", "#FFAA00", true);
-                break;
-            default:
-                AppendFeedLine("=== COMBAT ENDED ===", "#888888", true);
-                break;
-        }
-    }
-
-    #endregion
-
-    #region Frame List Display
-
-    private void UpdateFrameLists()
-    {
+        // Use the PreCombatPanel area — clear XAML children and rebuild dynamically
         PlayerFramesList.Items.Clear();
-        foreach (var frame in _playerFrames)
-        {
-            string status = frame.IsDestroyed ? "DESTROYED" :
-                           frame.IsShutDown ? "SHUTDOWN" :
-                           frame.ArmorPercent < 25 ? "CRITICAL" :
-                           frame.ArmorPercent < 50 ? "DAMAGED" : "OK";
-
-            string armorBar = BuildArmorBar(frame.ArmorPercent, 10);
-            var destroyedLocs = frame.DestroyedLocations.Count > 0
-                ? $"  LOST: {string.Join(",", frame.DestroyedLocations.Select(l => ShortLoc(l)))}"
-                : "";
-
-            int funcWeapons = frame.FunctionalWeapons.Count();
-            int totalWeapons = frame.WeaponGroups.Values.SelectMany(g => g).Count();
-
-            PlayerFramesList.Items.Add($"{frame.CustomName} ({frame.Class[0]}) [{status}]");
-            PlayerFramesList.Items.Add($" Armor: {armorBar} {frame.ArmorPercent:F0}%");
-            PlayerFramesList.Items.Add($" R:{frame.CurrentEnergy}/{frame.EffectiveReactorOutput} W:{funcWeapons}/{totalWeapons} Rng:{ShortRange(frame.CurrentRange)}");
-            if (destroyedLocs.Length > 0)
-                PlayerFramesList.Items.Add(destroyedLocs);
-            PlayerFramesList.Items.Add("");
-        }
-
         EnemyFramesList.Items.Clear();
-        foreach (var frame in _enemyFrames)
+
+        // Hide the static XAML elements, use them for deployment
+        PlayerFramesList.Visibility = Visibility.Collapsed;
+        EnemyFramesList.Visibility = Visibility.Collapsed;
+
+        // Clear any existing dynamic deployment elements (tagged)
+        var toRemove = PreCombatPanel.Children.OfType<FrameworkElement>()
+            .Where(e => e.Tag?.ToString() == "deploy_dynamic").ToList();
+        foreach (var el in toRemove) PreCombatPanel.Children.Remove(el);
+
+        // Header
+        var header = new TextBlock
         {
-            string status = frame.IsDestroyed ? "DESTROYED" :
-                           frame.IsShutDown ? "SHUTDOWN" :
-                           frame.ArmorPercent < 25 ? "CRITICAL" :
-                           frame.ArmorPercent < 50 ? "DAMAGED" : "OK";
+            Text = "DEPLOYMENT PHASE",
+            FontSize = 12, FontWeight = FontWeights.Bold,
+            Foreground = new SolidColorBrush(Color.FromRgb(0, 180, 255)),
+            FontFamily = new FontFamily("Consolas"),
+            Margin = new Thickness(0, 0, 0, 4),
+            Tag = "deploy_dynamic"
+        };
+        PreCombatPanel.Children.Add(header);
 
-            string armorBar = BuildArmorBar(frame.ArmorPercent, 10);
-            var destroyedLocs = frame.DestroyedLocations.Count > 0
-                ? $"  LOST: {string.Join(",", frame.DestroyedLocations.Select(l => ShortLoc(l)))}"
-                : "";
-
-            EnemyFramesList.Items.Add($"{frame.CustomName} ({frame.Class[0]}) [{status}]");
-            EnemyFramesList.Items.Add($" Armor: {armorBar} {frame.ArmorPercent:F0}%");
-            if (destroyedLocs.Length > 0)
-                EnemyFramesList.Items.Add(destroyedLocs);
-            EnemyFramesList.Items.Add("");
-        }
-
-        UpdateBattlefieldMap();
-    }
-
-    private string BuildArmorBar(float percent, int width)
-    {
-        int filled = (int)(percent / 100f * width);
-        filled = Math.Clamp(filled, 0, width);
-        return "[" + new string('#', filled) + new string('-', width - filled) + "]";
-    }
-
-    private string ShortLoc(HitLocation loc) => loc switch
-    {
-        HitLocation.Head => "HD",
-        HitLocation.CenterTorso => "CT",
-        HitLocation.LeftTorso => "LT",
-        HitLocation.RightTorso => "RT",
-        HitLocation.LeftArm => "LA",
-        HitLocation.RightArm => "RA",
-        HitLocation.Legs => "LG",
-        _ => "?"
-    };
-
-    private string ShortRange(RangeBand r) => r switch
-    {
-        RangeBand.PointBlank => "PB",
-        RangeBand.Short => "S",
-        RangeBand.Medium => "M",
-        RangeBand.Long => "L",
-        _ => "?"
-    };
-
-    #endregion
-
-    #region Battlefield Map
-
-    private void UpdateBattlefieldMap()
-    {
-        BattlefieldCanvas.Children.Clear();
-
-        double canvasW = BattlefieldCanvas.ActualWidth;
-        double canvasH = BattlefieldCanvas.ActualHeight;
-
-        if (canvasW < 10 || canvasH < 10)
+        var instructions = new TextBlock
         {
-            canvasW = 1200;
-            canvasH = 180;
-        }
+            Text = "Select a frame, then click a blue hex to deploy.",
+            FontSize = 9,
+            Foreground = new SolidColorBrush(Color.FromRgb(0, 140, 200)),
+            FontFamily = new FontFamily("Consolas"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 8),
+            Tag = "deploy_dynamic"
+        };
+        PreCombatPanel.Children.Add(instructions);
 
-        DrawMapGrid(canvasW, canvasH);
-        AssignMapPositions(canvasW, canvasH);
-        DrawRangeLines(canvasW, canvasH);
+        // Undeployed frames
+        var undeployed = _combatState.PlayerFrames
+            .Where(f => f.HexPosition == default(HexCoord)).ToList();
 
-        foreach (var frame in _playerFrames)
-            DrawUnitMarker(frame, isPlayer: true);
-
-        foreach (var frame in _enemyFrames)
-            DrawUnitMarker(frame, isPlayer: false);
-
-        UpdateMapRangeLabel();
-    }
-
-    private void DrawMapGrid(double w, double h)
-    {
-        int gridSpacing = 40;
-        var gridBrush = new SolidColorBrush(Color.FromArgb(20, 0, 255, 0));
-
-        for (double x = 0; x < w; x += gridSpacing)
+        if (undeployed.Any())
         {
-            BattlefieldCanvas.Children.Add(new Line
+            var label = new TextBlock
             {
-                X1 = x, Y1 = 0, X2 = x, Y2 = h,
-                Stroke = gridBrush, StrokeThickness = 0.5
-            });
-        }
-
-        for (double y = 0; y < h; y += gridSpacing)
-        {
-            BattlefieldCanvas.Children.Add(new Line
-            {
-                X1 = 0, Y1 = y, X2 = w, Y2 = y,
-                Stroke = gridBrush, StrokeThickness = 0.5
-            });
-        }
-    }
-
-    private void AssignMapPositions(double canvasW, double canvasH)
-    {
-        double margin = 60;
-        double fieldW = canvasW - margin * 2;
-
-        double PlayerRangeToX(RangeBand range)
-        {
-            double t = range switch
-            {
-                RangeBand.Long => 0.0,
-                RangeBand.Medium => 0.30,
-                RangeBand.Short => 0.60,
-                RangeBand.PointBlank => 0.85,
-                _ => 0.0
-            };
-            return margin + t * (fieldW / 2.0);
-        }
-
-        double EnemyRangeToX(RangeBand range)
-        {
-            double t = range switch
-            {
-                RangeBand.Long => 0.0,
-                RangeBand.Medium => 0.30,
-                RangeBand.Short => 0.60,
-                RangeBand.PointBlank => 0.85,
-                _ => 0.0
-            };
-            return canvasW - margin - t * (fieldW / 2.0);
-        }
-
-        double yPad = 25;
-        double usableH = canvasH - yPad * 2;
-
-        int playerIdx = 0;
-        int playerCount = _playerFrames.Count;
-        foreach (var frame in _playerFrames)
-        {
-            frame.MapX = PlayerRangeToX(frame.CurrentRange);
-            frame.MapY = playerCount > 1
-                ? yPad + usableH * ((double)playerIdx / (playerCount - 1))
-                : canvasH / 2.0;
-            playerIdx++;
-        }
-
-        int enemyIdx = 0;
-        int enemyCount = _enemyFrames.Count;
-        foreach (var frame in _enemyFrames)
-        {
-            frame.MapX = EnemyRangeToX(frame.CurrentRange);
-            frame.MapY = enemyCount > 1
-                ? yPad + usableH * ((double)enemyIdx / (enemyCount - 1))
-                : canvasH / 2.0;
-            enemyIdx++;
-        }
-    }
-
-    private void DrawRangeLines(double canvasW, double canvasH)
-    {
-        var aliveEnemies = _enemyFrames.Where(f => !f.IsDestroyed).ToList();
-        if (aliveEnemies.Count == 0) return;
-
-        foreach (var pf in _playerFrames.Where(f => !f.IsDestroyed))
-        {
-            var closest = aliveEnemies
-                .OrderBy(e => Math.Abs(pf.MapX - e.MapX) + Math.Abs(pf.MapY - e.MapY))
-                .First();
-
-            var rangeBand = pf.CurrentRange;
-            var lineColor = RangeBandToColor(rangeBand);
-            var lineBrush = new SolidColorBrush(Color.FromArgb(40, lineColor.R, lineColor.G, lineColor.B));
-
-            BattlefieldCanvas.Children.Add(new Line
-            {
-                X1 = pf.MapX, Y1 = pf.MapY,
-                X2 = closest.MapX, Y2 = closest.MapY,
-                Stroke = lineBrush, StrokeThickness = 1,
-                StrokeDashArray = new DoubleCollection { 3, 5 }
-            });
-
-            double midX = (pf.MapX + closest.MapX) / 2;
-            double midY = (pf.MapY + closest.MapY) / 2;
-
-            var rangeTag = new TextBlock
-            {
-                Text = PositioningSystem.FormatRangeBand(rangeBand),
-                FontSize = 7,
+                Text = "AWAITING DEPLOYMENT:",
+                FontSize = 10, FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(255, 170, 0)),
                 FontFamily = new FontFamily("Consolas"),
-                Foreground = new SolidColorBrush(Color.FromArgb(100, lineColor.R, lineColor.G, lineColor.B))
+                Margin = new Thickness(0, 0, 0, 4),
+                Tag = "deploy_dynamic"
             };
-            Canvas.SetLeft(rangeTag, midX - 15);
-            Canvas.SetTop(rangeTag, midY - 6);
-            BattlefieldCanvas.Children.Add(rangeTag);
+            PreCombatPanel.Children.Add(label);
+
+            foreach (var frame in undeployed)
+            {
+                bool isSelected = _selectedDeployFrame?.InstanceId == frame.InstanceId;
+                var btn = new Button
+                {
+                    Content = $"{frame.CustomName} ({frame.Class})",
+                    Tag = "deploy_dynamic",
+                    DataContext = frame,
+                    Height = 28,
+                    Margin = new Thickness(0, 0, 0, 2),
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize = 10, FontWeight = FontWeights.Bold,
+                    Background = new SolidColorBrush(isSelected ? Color.FromRgb(0, 40, 60) : Color.FromRgb(0, 20, 30)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0, 200, 255)),
+                    BorderBrush = new SolidColorBrush(isSelected ? Color.FromRgb(0, 140, 200) : Color.FromRgb(0, 60, 80)),
+                    BorderThickness = new Thickness(isSelected ? 2 : 1)
+                };
+                btn.Click += DeployFrameButton_Click;
+                PreCombatPanel.Children.Add(btn);
+            }
+        }
+
+        // Deployed frames
+        var deployed = _combatState.PlayerFrames
+            .Where(f => f.HexPosition != default(HexCoord)).ToList();
+
+        if (deployed.Any())
+        {
+            var deployedLabel = new TextBlock
+            {
+                Text = $"DEPLOYED ({deployed.Count}/{_combatState.PlayerFrames.Count}):",
+                FontSize = 10, FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 0)),
+                FontFamily = new FontFamily("Consolas"),
+                Margin = new Thickness(0, 10, 0, 4),
+                Tag = "deploy_dynamic"
+            };
+            PreCombatPanel.Children.Add(deployedLabel);
+
+            foreach (var frame in deployed)
+            {
+                var text = new TextBlock
+                {
+                    Text = $"  {frame.CustomName} @ {frame.HexPosition}",
+                    FontSize = 9,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0, 170, 0)),
+                    FontFamily = new FontFamily("Consolas"),
+                    Tag = "deploy_dynamic"
+                };
+                PreCombatPanel.Children.Add(text);
+            }
+        }
+
+        // Enemy forces
+        var enemyLabel = new TextBlock
+        {
+            Text = $"ENEMY FORCES ({_combatState.EnemyFrames.Count}):",
+            FontSize = 10, FontWeight = FontWeights.Bold,
+            Foreground = new SolidColorBrush(Color.FromRgb(255, 60, 60)),
+            FontFamily = new FontFamily("Consolas"),
+            Margin = new Thickness(0, 10, 0, 4),
+            Tag = "deploy_dynamic"
+        };
+        PreCombatPanel.Children.Add(enemyLabel);
+
+        foreach (var frame in _combatState.EnemyFrames)
+        {
+            var text = new TextBlock
+            {
+                Text = $"  {frame.CustomName} ({frame.Class})",
+                FontSize = 9,
+                Foreground = new SolidColorBrush(Color.FromRgb(170, 60, 60)),
+                FontFamily = new FontFamily("Consolas"),
+                Tag = "deploy_dynamic"
+            };
+            PreCombatPanel.Children.Add(text);
+        }
+
+        // Reset deployment button
+        var resetBtn = new Button
+        {
+            Content = "RESET DEPLOYMENT",
+            Tag = "deploy_dynamic",
+            Height = 30,
+            Margin = new Thickness(0, 12, 0, 0),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 10, FontWeight = FontWeights.Bold,
+            Background = new SolidColorBrush(Color.FromRgb(51, 34, 0)),
+            Foreground = new SolidColorBrush(Color.FromRgb(255, 170, 0)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(102, 68, 0)),
+            BorderThickness = new Thickness(1)
+        };
+        resetBtn.Click += ResetDeployment_Click;
+        PreCombatPanel.Children.Add(resetBtn);
+
+        // Update START COMBAT button
+        bool allDeployed = !_combatState.PlayerFrames.Any(f => f.HexPosition == default(HexCoord));
+        StartCombatButton.IsEnabled = allDeployed;
+        StartCombatButton.Opacity = allDeployed ? 1.0 : 0.5;
+    }
+
+    private void DeployFrameButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.DataContext is CombatFrame frame)
+        {
+            _selectedDeployFrame = frame;
+            AppendFeedText($"Selected {frame.CustomName} — click a blue hex to deploy", "#00AAFF");
+            UpdateDeploymentUI();
+            RenderFullMap();
         }
     }
 
-    private Color RangeBandToColor(RangeBand range) => range switch
+    private void ResetDeployment_Click(object sender, RoutedEventArgs e)
     {
-        RangeBand.PointBlank => (Color)ColorConverter.ConvertFromString("#FF4444"),
-        RangeBand.Short => (Color)ColorConverter.ConvertFromString("#FFAA44"),
-        RangeBand.Medium => (Color)ColorConverter.ConvertFromString("#AAFF44"),
-        RangeBand.Long => (Color)ColorConverter.ConvertFromString("#44AAFF"),
-        _ => Colors.Gray
-    };
+        if (_combatState == null) return;
 
-    private void UpdateMapRangeLabel()
-    {
-        var alivePlayer = _playerFrames.FirstOrDefault(f => !f.IsDestroyed);
-        if (alivePlayer != null)
+        foreach (var frame in _combatState.PlayerFrames)
         {
-            MapRangeLabel.Text = $"Engagement: {PositioningSystem.FormatRangeBand(alivePlayer.CurrentRange)}";
-            var c = RangeBandToColor(alivePlayer.CurrentRange);
-            MapRangeLabel.Foreground = new SolidColorBrush(c);
+            if (frame.HexPosition != default(HexCoord))
+            {
+                _combatState.Grid.RemoveFrame(frame.HexPosition);
+                frame.HexPosition = default;
+            }
         }
-        else
-        {
-            MapRangeLabel.Text = "";
-        }
+
+        _selectedDeployFrame = null;
+        AppendFeedText("Deployment reset", "#FFAA00");
+        UpdateDeploymentUI();
+        RenderFullMap();
     }
 
-    private void DrawUnitMarker(CombatFrame frame, bool isPlayer)
+    private void HandleDeploymentClick(HexCoord hex)
     {
-        string baseColor;
-        string bgColor;
-        string borderColor;
+        if (_combatState == null || _selectedDeployFrame == null) return;
 
-        if (frame.IsDestroyed)
+        if (!_deploymentZoneHexes.Contains(hex))
         {
-            baseColor = "#444444"; bgColor = "#0A0A0A"; borderColor = "#222222";
-        }
-        else if (frame.IsShutDown)
-        {
-            baseColor = "#AAAA00"; bgColor = "#111100"; borderColor = "#555500";
-        }
-        else if (frame.ArmorPercent < 25)
-        {
-            baseColor = isPlayer ? "#FFAA00" : "#FF4400";
-            bgColor = isPlayer ? "#1A1100" : "#1A0800";
-            borderColor = isPlayer ? "#664400" : "#661800";
-        }
-        else
-        {
-            baseColor = isPlayer ? "#00FF00" : "#FF3333";
-            bgColor = isPlayer ? "#001A00" : "#1A0000";
-            borderColor = isPlayer ? "#005500" : "#550000";
+            AppendFeedText("Must deploy in the blue zone", "#FF4444");
+            return;
         }
 
-        var fgBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(baseColor));
-
-        string classTag = frame.Class switch
+        if (_combatState.Grid.IsOccupied(hex))
         {
-            "Light" => "L", "Medium" => "M", "Heavy" => "H", "Assault" => "A", _ => "?"
-        };
+            AppendFeedText("Hex already occupied", "#FF4444");
+            return;
+        }
 
-        int armorPct = (int)frame.ArmorPercent;
-        string statusLine = frame.IsDestroyed ? "DESTROYED" :
-                            frame.IsShutDown ? "SHUTDOWN" :
-                            $"A:{armorPct}% E:{frame.CurrentEnergy}";
+        // Remove from previous position if re-deploying
+        if (_selectedDeployFrame.HexPosition != default(HexCoord))
+            _combatState.Grid.RemoveFrame(_selectedDeployFrame.HexPosition);
 
-        var panel = new StackPanel();
-        panel.Children.Add(new TextBlock
-        {
-            Text = $"[{classTag}] {frame.CustomName}",
-            FontSize = 8, FontWeight = FontWeights.Bold,
-            FontFamily = new FontFamily("Consolas"),
-            Foreground = fgBrush,
-            HorizontalAlignment = HorizontalAlignment.Center
-        });
-        panel.Children.Add(new TextBlock
-        {
-            Text = statusLine,
-            FontSize = 7,
-            FontFamily = new FontFamily("Consolas"),
-            Foreground = fgBrush,
-            HorizontalAlignment = HorizontalAlignment.Center
-        });
+        _selectedDeployFrame.HexPosition = hex;
+        _combatState.Grid.PlaceFrame(_selectedDeployFrame.InstanceId, hex);
 
-        var marker = new Border
-        {
-            BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(borderColor)),
-            Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(bgColor)),
-            BorderThickness = new Thickness(1),
-            Padding = new Thickness(3, 1, 3, 1),
-            Child = panel
-        };
-
-        double markerX = frame.MapX - 40;
-        if (markerX < 0) markerX = 0;
-
-        Canvas.SetLeft(marker, markerX);
-        Canvas.SetTop(marker, frame.MapY - 14);
-        BattlefieldCanvas.Children.Add(marker);
-
-        var dot = new Ellipse { Width = 5, Height = 5, Fill = fgBrush };
-        Canvas.SetLeft(dot, frame.MapX - 2.5);
-        Canvas.SetTop(dot, frame.MapY - 2.5);
-        BattlefieldCanvas.Children.Add(dot);
+        AppendFeedText($"{_selectedDeployFrame.CustomName} deployed at {hex}", "#00FF00");
+        _selectedDeployFrame = null;
+        UpdateDeploymentUI();
+        RenderFullMap();
     }
 
     #endregion
 
-    #region Auto-Resolve Playback (round-by-round with live map)
+    #region Combat Start
 
     private void StartCombatButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_isPlayingBack) return;
+        if (_combatState == null) return;
 
-        ClearFeed();
+        // Transition from deployment to combat
+        _combatState.Phase = TurnPhase.RoundStart;
+        _deploymentZoneHexes.Clear();
 
-        if (TacticalModeCheckBox.IsChecked == true)
-        {
-            StartTacticalCombat();
-        }
-        else
-        {
-            StartAutoResolve();
-        }
-    }
+        // Clear deployment UI elements
+        var toRemove = PreCombatPanel.Children.OfType<FrameworkElement>()
+            .Where(el => el.Tag?.ToString() == "deploy_dynamic").ToList();
+        foreach (var el in toRemove) PreCombatPanel.Children.Remove(el);
 
-    private void StartAutoResolve()
-    {
-        var positioning = new PositioningSystem();
-        positioning.InitializeRangeBands(_playerFrames, _enemyFrames);
+        StartCombatButton.Visibility = Visibility.Collapsed;
+        AutoResolveButton.Visibility = Visibility.Visible;
+        WithdrawButton.Visibility = Visibility.Visible;
+        PreCombatPanel.Visibility = Visibility.Collapsed;
 
-        _playbackRoundNumber = 1;
-        _playbackCurrentRound = null;
-        _playbackEventIdx = -1;
-        _isPlayingBack = true;
+        // Start first round
+        var events = _combatService.StartRound(_combatState);
+        DisplayEvents(events);
+        AppendFeedText($"===== ROUND {_combatState.RoundNumber} =====", "#FFFF00");
 
-        StartCombatButton.IsEnabled = false;
-        SkipButton.Visibility = Visibility.Visible;
-        ResetButton.IsEnabled = false;
-        FrameSelectorButton.IsEnabled = false;
-
-        AppendFeedLine("COMBAT INITIATED", "#00FF00", true);
-        UpdateFrameLists();
-
-        _playbackTimer = new DispatcherTimer();
-        _playbackTimer.Interval = TimeSpan.FromMilliseconds(120);
-        _playbackTimer.Tick += PlaybackTick;
-        _playbackTimer.Start();
-    }
-
-    private void PlaybackTick(object? sender, EventArgs e)
-    {
-        // Check if combat is over
-        bool playerAlive = _playerFrames.Any(f => !f.IsDestroyed);
-        bool enemyAlive = _enemyFrames.Any(f => !f.IsDestroyed);
-
-        // If we need to execute a new round
-        if (_playbackCurrentRound == null)
-        {
-            if (!playerAlive && !enemyAlive)
-            {
-                AppendResultBanner(CombatResult.Victory);
-                AppendFeedLine("Mutual destruction.", "#888888");
-                StopPlayback(); return;
-            }
-            if (!playerAlive)
-            {
-                AppendResultBanner(CombatResult.Defeat);
-                StopPlayback(); return;
-            }
-            if (!enemyAlive)
-            {
-                AppendResultBanner(CombatResult.Victory);
-                StopPlayback(); return;
-            }
-            if (_playbackRoundNumber > 30)
-            {
-                AppendFeedLine("=== STALEMATE ===", "#888888", true);
-                StopPlayback(); return;
-            }
-
-            // Generate AI decisions for both sides and execute round
-            var ai = new CombatAI();
-            var actionSystem = new ActionSystem();
-
-            var playerDecisions = new RoundTacticalDecision();
-            var activeEnemies = _enemyFrames.Where(f => !f.IsDestroyed).ToList();
-            foreach (var frame in _playerFrames.Where(f => !f.IsDestroyed && !f.IsShutDown))
-            {
-                playerDecisions.FrameOrders[frame.InstanceId] =
-                    ai.GenerateActions(frame, activeEnemies, _playerOrders, actionSystem);
-            }
-
-            var round = _combatService.ExecuteRound(
-                _playerFrames, _enemyFrames,
-                playerDecisions, _playerOrders, _enemyOrders, _playbackRoundNumber);
-
-            _playbackCurrentRound = round;
-            _playbackEventIdx = -1; // -1 = show header next
-
-            // Pause for round header
-            if (_playbackTimer != null)
-                _playbackTimer.Interval = TimeSpan.FromMilliseconds(400);
-            return;
-        }
-
-        // Show round header
-        if (_playbackEventIdx == -1)
-        {
-            AppendRoundHeader(_playbackCurrentRound.RoundNumber);
-            _playbackEventIdx = 0;
-
-            if (_playbackTimer != null)
-                _playbackTimer.Interval = TimeSpan.FromMilliseconds(150);
-            return;
-        }
-
-        // Show events one at a time
-        if (_playbackEventIdx < _playbackCurrentRound.Events.Count)
-        {
-            AppendCombatEvent(_playbackCurrentRound.Events[_playbackEventIdx]);
-            _playbackEventIdx++;
-
-            if (_playbackTimer != null)
-                _playbackTimer.Interval = TimeSpan.FromMilliseconds(100);
-        }
-        else
-        {
-            // Round finished — update map and frame lists with current state
-            UpdateFrameLists();
-            _playbackCurrentRound = null;
-            _playbackRoundNumber++;
-
-            // Longer pause between rounds
-            if (_playbackTimer != null)
-                _playbackTimer.Interval = TimeSpan.FromMilliseconds(500);
-        }
-    }
-
-    private void SkipPlayback()
-    {
-        if (!_isPlayingBack) return;
-
-        _playbackTimer?.Stop();
-
-        // Show remaining events from current round if any
-        if (_playbackCurrentRound != null)
-        {
-            if (_playbackEventIdx == -1)
-                AppendRoundHeader(_playbackCurrentRound.RoundNumber);
-
-            int startEvt = Math.Max(0, _playbackEventIdx);
-            for (int ev = startEvt; ev < _playbackCurrentRound.Events.Count; ev++)
-                AppendCombatEvent(_playbackCurrentRound.Events[ev]);
-
-            _playbackRoundNumber++;
-        }
-
-        // Run remaining rounds instantly
-        var ai = new CombatAI();
-        var actionSystem = new ActionSystem();
-
-        while (_playbackRoundNumber <= 30)
-        {
-            bool playerAlive = _playerFrames.Any(f => !f.IsDestroyed);
-            bool enemyAlive = _enemyFrames.Any(f => !f.IsDestroyed);
-
-            if (!playerAlive && !enemyAlive)
-            { AppendResultBanner(CombatResult.Victory); break; }
-            if (!playerAlive)
-            { AppendResultBanner(CombatResult.Defeat); break; }
-            if (!enemyAlive)
-            { AppendResultBanner(CombatResult.Victory); break; }
-
-            var playerDecisions = new RoundTacticalDecision();
-            var activeEnemies = _enemyFrames.Where(f => !f.IsDestroyed).ToList();
-            foreach (var frame in _playerFrames.Where(f => !f.IsDestroyed && !f.IsShutDown))
-            {
-                playerDecisions.FrameOrders[frame.InstanceId] =
-                    ai.GenerateActions(frame, activeEnemies, _playerOrders, actionSystem);
-            }
-
-            var round = _combatService.ExecuteRound(
-                _playerFrames, _enemyFrames,
-                playerDecisions, _playerOrders, _enemyOrders, _playbackRoundNumber);
-
-            AppendRoundHeader(round.RoundNumber);
-            foreach (var evt in round.Events)
-                AppendCombatEvent(evt);
-
-            _playbackRoundNumber++;
-        }
-
-        if (_playbackRoundNumber > 30 && _playerFrames.Any(f => !f.IsDestroyed) && _enemyFrames.Any(f => !f.IsDestroyed))
-            AppendFeedLine("=== STALEMATE ===", "#888888", true);
-
-        StopPlayback();
-        UpdateFrameLists();
-    }
-
-    private void StopPlayback()
-    {
-        _isPlayingBack = false;
-        _playbackTimer?.Stop();
-        _playbackTimer = null;
-        _playbackCurrentRound = null;
-
-        StartCombatButton.IsEnabled = true;
-        SkipButton.Visibility = Visibility.Collapsed;
-        ResetButton.IsEnabled = true;
-        FrameSelectorButton.IsEnabled = true;
-
-        if (_isCampaignMode)
-            HandlePostCombat();
-    }
-
-    private void SkipButton_Click(object sender, RoutedEventArgs e)
-    {
-        SkipPlayback();
-    }
-
-    private void CombatFeed_MouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (_isPlayingBack)
-            SkipPlayback();
-    }
-
-    private void Window_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (_isPlayingBack && (e.Key == Key.Space || e.Key == Key.Enter || e.Key == Key.Escape))
-            SkipPlayback();
+        UpdateTurnOrder();
+        AdvanceToNextUnit();
     }
 
     #endregion
 
-    #region Tactical Combat (Inline Planning)
+    #region Turn Flow
 
-    private void StartTacticalCombat()
+    private void AdvanceToNextUnit()
     {
-        _isTacticalMode = true;
-        _tacticalRound = 1;
-        _enemyOrders = new TacticalOrders();
+        if (_combatState == null) return;
 
-        var positioning = new PositioningSystem();
-        positioning.InitializeRangeBands(_playerFrames, _enemyFrames);
-
-        AppendFeedLine("TACTICAL COMBAT INITIATED", "#00FFFF", true);
-        AppendFeedLine("Plan actions for your frames, then execute.", "#006666");
-
-        ShowTacticalPanel();
-    }
-
-    private void ShowTacticalPanel()
-    {
-        // Check end conditions
-        bool playerAlive = _playerFrames.Any(f => !f.IsDestroyed);
-        bool enemyAlive = _enemyFrames.Any(f => !f.IsDestroyed);
-
-        if (!playerAlive && !enemyAlive)
+        // Check if combat is over
+        if (_combatState.Result != CombatResult.Ongoing)
         {
-            AppendResultBanner(CombatResult.Victory);
-            EndTacticalMode();
-            return;
-        }
-        if (!playerAlive)
-        {
-            AppendResultBanner(CombatResult.Defeat);
-            EndTacticalMode();
-            return;
-        }
-        if (!enemyAlive)
-        {
-            AppendResultBanner(CombatResult.Victory);
-            EndTacticalMode();
-            return;
-        }
-        if (_tacticalRound > 30)
-        {
-            AppendFeedLine("=== STALEMATE ===", "#888888", true);
-            EndTacticalMode();
+            EndCombat();
             return;
         }
 
-        // Switch panels
-        SetupPanel.Visibility = Visibility.Collapsed;
-        TacticalPanel.Visibility = Visibility.Visible;
-        StartCombatButton.IsEnabled = false;
-        FrameSelectorButton.IsEnabled = false;
+        var frame = _combatService.AdvanceActivation(_combatState);
 
-        TacticalRoundHeader.Text = $"ROUND {_tacticalRound}";
-
-        // Initialize plans for this round
-        _framePlans.Clear();
-        _frameFocusTargets.Clear();
-        foreach (var frame in _playerFrames.Where(f => !f.IsDestroyed && !f.IsShutDown))
+        if (frame == null)
         {
-            _framePlans[frame.InstanceId] = new List<PlannedAction>();
-            _frameFocusTargets[frame.InstanceId] = null;
-        }
+            // Round is over — process end of round
+            var endEvents = _combatService.EndRound(_combatState);
+            DisplayEvents(endEvents);
 
-        // Build frame tabs
-        BuildFrameTabs();
-
-        // Update enemy status text
-        UpdateEnemyStatusDisplay();
-
-        // Select first frame
-        _selectedFrameIdx = 0;
-        var activeFrames = _playerFrames.Where(f => !f.IsDestroyed && !f.IsShutDown).ToList();
-        if (activeFrames.Count > 0)
-            ShowFrameActions(activeFrames[0]);
-    }
-
-    private void BuildFrameTabs()
-    {
-        FrameTabsPanel.Children.Clear();
-        int idx = 0;
-        foreach (var frame in _playerFrames.Where(f => !f.IsDestroyed && !f.IsShutDown))
-        {
-            int capturedIdx = idx;
-            var btn = new Button
+            if (_combatState.Result != CombatResult.Ongoing)
             {
-                Content = $"{frame.CustomName} ({frame.Class[0]})",
-                Tag = frame.InstanceId,
-                Width = 120, Height = 24,
-                Margin = new Thickness(0, 0, 3, 3),
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 10,
-                FontWeight = FontWeights.Bold,
-                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(
-                    capturedIdx == _selectedFrameIdx ? "#003300" : "#0A0A0A")),
-                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(
-                    capturedIdx == _selectedFrameIdx ? "#00FF00" : "#006600")),
-                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(
-                    capturedIdx == _selectedFrameIdx ? "#00FF00" : "#003300")),
-                BorderThickness = new Thickness(1)
-            };
-            btn.Click += (s, e) =>
-            {
-                _selectedFrameIdx = capturedIdx;
-                var activeFrames = _playerFrames.Where(f => !f.IsDestroyed && !f.IsShutDown).ToList();
-                if (capturedIdx < activeFrames.Count)
-                    ShowFrameActions(activeFrames[capturedIdx]);
-                BuildFrameTabs(); // Refresh highlight
-            };
-            FrameTabsPanel.Children.Add(btn);
-            idx++;
+                EndCombat();
+                return;
+            }
+
+            // Start next round
+            var startEvents = _combatService.StartRound(_combatState);
+            DisplayEvents(startEvents);
+            AppendFeedText($"===== ROUND {_combatState.RoundNumber} =====", "#FFFF00");
+            UpdateTurnOrder();
+            AdvanceToNextUnit();
+            return;
         }
+
+        UpdateTurnOrder();
+
+        if (_combatState.IsPlayerTurn)
+        {
+            // Player's turn — show UI
+            ShowPlayerTurnUI(frame);
+        }
+        else
+        {
+            // AI turn — execute with delay
+            ShowAITurnUI(frame);
+            ExecuteAITurnWithDelay(frame);
+        }
+
+        RenderFullMap();
     }
 
-    private void ShowFrameActions(CombatFrame frame)
+    private void ShowPlayerTurnUI(CombatFrame frame)
     {
-        // Show frame info
-        int ap = frame.IsShutDown ? 0 : (frame.HasGyroHit ? 1 : 2);
-        int energy = frame.EffectiveReactorOutput;
-        var plans = _framePlans.GetValueOrDefault(frame.InstanceId) ?? new List<PlannedAction>();
-        int usedAP = plans.Sum(a => ActionSystem.GetActionCost(a.Action));
-        int remainingAP = ap - usedAP;
+        AudioService.PlayTurnStart();
+        ActiveUnitHeader.Text = $"{frame.CustomName} ({frame.Class})";
+        ActiveUnitHeader.Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 0));
 
-        FrameInfoText.Text = $"=== {frame.CustomName} ({frame.Class}) ===\n" +
-                             $"Reactor: {energy}  Move: {frame.MovementEnergyCost}E\n" +
-                             $"AP: {remainingAP}/{ap}  Range: {PositioningSystem.FormatRangeBand(frame.CurrentRange)}\n" +
-                             $"Armor: {frame.ArmorPercent:F0}%  Stress: {frame.ReactorStress}";
+        var info = new System.Text.StringBuilder();
+        info.AppendLine($"AP: {frame.ActionPoints}/{frame.MaxActionPoints}");
+        info.AppendLine($"Reactor: {frame.CurrentEnergy}/{frame.EffectiveReactorOutput}E | Stress: {frame.ReactorStress}");
+        info.AppendLine($"Armor: {frame.ArmorPercent:F0}% | Move: {frame.HexMovement} hexes");
+        var terrainCell = _combatState?.Grid.GetCell(frame.HexPosition);
+        string terrainName = terrainCell != null ? HexGrid.GetTerrainName(terrainCell.Terrain) : "?";
+        int terrainDef = terrainCell != null ? HexGrid.GetTerrainDefenseBonus(terrainCell.Terrain) : 0;
+        string terrainInfo = terrainDef > 0 ? $"{terrainName} (+{terrainDef} def)" : terrainName;
+        info.AppendLine($"Terrain: {terrainInfo} | Pos: {frame.HexPosition}");
+        ActiveUnitInfo.Text = info.ToString();
 
-        // Update planned actions display
-        UpdatePlannedActionsDisplay(frame);
+        // Show weapon groups
+        var wg = new System.Text.StringBuilder();
+        wg.AppendLine("WEAPONS:");
+        foreach (var (groupId, weapons) in frame.WeaponGroups)
+        {
+            var functional = weapons.Where(w => !w.IsDestroyed).ToList();
+            if (!functional.Any()) continue;
+            int totalDmg = functional.Sum(w => w.Damage);
+            int totalE = functional.Sum(w => w.EnergyCost);
+            string names = string.Join(", ", functional.Select(w => w.Name));
+            wg.AppendLine($"  G{groupId}: {names} ({totalDmg}dmg, {totalE}E)");
+        }
+        WeaponGroupsText.Text = wg.ToString();
 
-        // Build fire buttons for this frame's weapon groups
+        // Show action buttons
+        var available = new ActionSystem().GetAvailableActions(frame);
+        ActionsLabel.Visibility = Visibility.Visible;
+        BtnMove.Visibility = available.Contains(CombatAction.Move) ? Visibility.Visible : Visibility.Collapsed;
+        BtnSprint.Visibility = available.Contains(CombatAction.Sprint) ? Visibility.Visible : Visibility.Collapsed;
+        BtnBrace.Visibility = available.Contains(CombatAction.Brace) ? Visibility.Visible : Visibility.Collapsed;
+        BtnOverwatch.Visibility = available.Contains(CombatAction.Overwatch) ? Visibility.Visible : Visibility.Collapsed;
+        BtnVent.Visibility = available.Contains(CombatAction.VentReactor) ? Visibility.Visible : Visibility.Collapsed;
+        BtnEndTurn.Visibility = Visibility.Visible;
+
+        // Build fire buttons
         BuildFireButtons(frame);
 
-        // Enable/disable action buttons based on remaining AP
-        bool canAct = remainingAP >= 1;
-        bool canMove = canAct && !frame.DestroyedLocations.Contains(HitLocation.Legs);
+        // Highlight movement range on map
+        _highlightedMoveHexes = HexPathfinding.GetReachableHexes(
+            _combatState!.Grid, frame.HexPosition, PositioningSystem.GetEffectiveHexMovement(frame));
 
-        BtnMoveClose.IsEnabled = canMove && frame.CurrentRange > RangeBand.PointBlank;
-        BtnMovePullBack.IsEnabled = canMove && frame.CurrentRange < RangeBand.Long;
-        BtnBrace.IsEnabled = canAct;
-        BtnOverwatch.IsEnabled = canAct;
-        BtnVent.IsEnabled = canAct && frame.ReactorStress > 0;
+        ClearSelectedAction();
+    }
 
-        // Visual feedback for disabled buttons
-        SetButtonEnabled(BtnMoveClose, BtnMoveClose.IsEnabled);
-        SetButtonEnabled(BtnMovePullBack, BtnMovePullBack.IsEnabled);
-        SetButtonEnabled(BtnBrace, BtnBrace.IsEnabled);
-        SetButtonEnabled(BtnOverwatch, BtnOverwatch.IsEnabled);
-        SetButtonEnabled(BtnVent, BtnVent.IsEnabled);
+    private void ShowAITurnUI(CombatFrame frame)
+    {
+        ActiveUnitHeader.Text = $"{frame.CustomName} ({frame.Class})";
+        ActiveUnitHeader.Foreground = new SolidColorBrush(Color.FromRgb(200, 50, 50));
+        ActiveUnitInfo.Text = $"Enemy activating...\nAP: {frame.ActionPoints}/{frame.MaxActionPoints}";
+        WeaponGroupsText.Text = "";
+
+        HideActionButtons();
+    }
+
+    private void HideActionButtons()
+    {
+        ActionsLabel.Visibility = Visibility.Collapsed;
+        BtnMove.Visibility = Visibility.Collapsed;
+        BtnSprint.Visibility = Visibility.Collapsed;
+        BtnBrace.Visibility = Visibility.Collapsed;
+        BtnOverwatch.Visibility = Visibility.Collapsed;
+        BtnVent.Visibility = Visibility.Collapsed;
+        BtnEndTurn.Visibility = Visibility.Collapsed;
+        FireButtonsPanel.Children.Clear();
     }
 
     private void BuildFireButtons(CombatFrame frame)
     {
         FireButtonsPanel.Children.Clear();
-
-        var plans = _framePlans.GetValueOrDefault(frame.InstanceId) ?? new List<PlannedAction>();
-        int ap = frame.IsShutDown ? 0 : (frame.HasGyroHit ? 1 : 2);
-        int usedAP = plans.Sum(a => ActionSystem.GetActionCost(a.Action));
-        int remainingAP = ap - usedAP;
-
         foreach (var (groupId, weapons) in frame.WeaponGroups)
         {
-            var funcWeapons = weapons.Where(w => !w.IsDestroyed).ToList();
-            if (!funcWeapons.Any()) continue;
+            var functional = weapons.Where(w => !w.IsDestroyed).ToList();
+            if (!functional.Any()) continue;
 
-            string name = funcWeapons.First().Name;
-            int totalEnergy = funcWeapons.Sum(w => w.EnergyCost);
-            int totalDmg = funcWeapons.Sum(w => w.Damage);
+            int totalDmg = functional.Sum(w => w.Damage);
+            int totalE = functional.Sum(w => w.EnergyCost);
 
             var btn = new Button
             {
-                Content = $"G{groupId}: {name} {totalDmg}D {totalEnergy}E",
+                Content = $"FIRE G{groupId} ({totalDmg}d {totalE}E)",
                 Tag = $"Fire_{groupId}",
                 Height = 28,
-                Margin = new Thickness(0, 0, 3, 3),
-                Padding = new Thickness(6, 0, 6, 0),
+                Margin = new Thickness(0, 0, 0, 2),
                 FontFamily = new FontFamily("Consolas"),
-                FontSize = 9,
+                FontSize = 10,
                 FontWeight = FontWeights.Bold,
-                BorderThickness = new Thickness(1)
+                Background = new SolidColorBrush(Color.FromRgb(0, 26, 0)),
+                Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 0)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0, 68, 0)),
+                BorderThickness = new Thickness(1),
+                Visibility = frame.ActionPoints >= 1 ? Visibility.Visible : Visibility.Collapsed
             };
-
-            bool canFire = remainingAP >= 1;
-            btn.IsEnabled = canFire;
-            SetButtonEnabled(btn, canFire);
             btn.Click += ActionButton_Click;
-
             FireButtonsPanel.Children.Add(btn);
         }
     }
 
-    private void SetButtonEnabled(Button btn, bool enabled)
+    private void ClearSelectedAction()
     {
-        if (enabled)
-        {
-            btn.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#001A00"));
-            btn.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#00FF00"));
-            btn.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#004400"));
-        }
-        else
-        {
-            btn.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0A0A0A"));
-            btn.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#333333"));
-            btn.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A1A1A"));
-        }
-    }
-
-    private void UpdatePlannedActionsDisplay(CombatFrame frame)
-    {
-        var plans = _framePlans.GetValueOrDefault(frame.InstanceId) ?? new List<PlannedAction>();
-
-        if (plans.Count == 0)
-        {
-            PlannedActionsText.Text = "  (none)";
-            PlannedActionsText.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#444444"));
-            return;
-        }
-
-        PlannedActionsText.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#00FF00"));
-        var lines = new List<string>();
-        for (int i = 0; i < plans.Count; i++)
-        {
-            lines.Add($"  {i + 1}. {FormatPlannedAction(plans[i])}");
-        }
-        PlannedActionsText.Text = string.Join("\n", lines);
-    }
-
-    private string FormatPlannedAction(PlannedAction action) => action.Action switch
-    {
-        CombatAction.Move when action.MoveDirection == MovementDirection.Close => "Move >> Close",
-        CombatAction.Move when action.MoveDirection == MovementDirection.PullBack => "Move << Pull Back",
-        CombatAction.FireGroup => $"Fire Group {action.WeaponGroupId}",
-        CombatAction.Brace => "Brace (+defense)",
-        CombatAction.Overwatch => "Overwatch (interrupt)",
-        CombatAction.VentReactor => "Vent Reactor",
-        CombatAction.Sprint => $"Sprint {action.MoveDirection}",
-        CombatAction.CalledShot => $"Called Shot G{action.WeaponGroupId} -> {action.CalledShotLocation}",
-        _ => action.Action.ToString()
-    };
-
-    private void ActionButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not Button btn) return;
-        string tag = btn.Tag?.ToString() ?? "";
-
-        var activeFrames = _playerFrames.Where(f => !f.IsDestroyed && !f.IsShutDown).ToList();
-        if (_selectedFrameIdx >= activeFrames.Count) return;
-        var frame = activeFrames[_selectedFrameIdx];
-
-        var plans = _framePlans.GetValueOrDefault(frame.InstanceId);
-        if (plans == null) return;
-
-        int ap = frame.IsShutDown ? 0 : (frame.HasGyroHit ? 1 : 2);
-        int usedAP = plans.Sum(a => ActionSystem.GetActionCost(a.Action));
-
-        PlannedAction? newAction = tag switch
-        {
-            "MoveClose" => new PlannedAction { Action = CombatAction.Move, MoveDirection = MovementDirection.Close },
-            "MovePullBack" => new PlannedAction { Action = CombatAction.Move, MoveDirection = MovementDirection.PullBack },
-            "Brace" => new PlannedAction { Action = CombatAction.Brace },
-            "Overwatch" => new PlannedAction { Action = CombatAction.Overwatch },
-            "Vent" => new PlannedAction { Action = CombatAction.VentReactor },
-            _ when tag.StartsWith("Fire_") => new PlannedAction
-            {
-                Action = CombatAction.FireGroup,
-                WeaponGroupId = int.Parse(tag.Replace("Fire_", ""))
-            },
-            _ => null
-        };
-
-        if (newAction == null) return;
-
-        int cost = ActionSystem.GetActionCost(newAction.Action);
-        if (usedAP + cost > ap) return;
-
-        plans.Add(newAction);
-        ShowFrameActions(frame);
-    }
-
-    private void ClearActions_Click(object sender, RoutedEventArgs e)
-    {
-        var activeFrames = _playerFrames.Where(f => !f.IsDestroyed && !f.IsShutDown).ToList();
-        if (_selectedFrameIdx >= activeFrames.Count) return;
-        var frame = activeFrames[_selectedFrameIdx];
-
-        if (_framePlans.ContainsKey(frame.InstanceId))
-            _framePlans[frame.InstanceId].Clear();
-
-        ShowFrameActions(frame);
-    }
-
-    private void ExecuteOrders_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_isTacticalMode) return;
-
-        // Build player decisions
-        var playerDecisions = new RoundTacticalDecision();
-        foreach (var (frameId, plans) in _framePlans)
-        {
-            var frameActions = new FrameActions();
-            frameActions.Actions.AddRange(plans);
-            if (_frameFocusTargets.TryGetValue(frameId, out var targetId) && targetId.HasValue)
-                frameActions.FocusTargetId = targetId.Value;
-            playerDecisions.FrameOrders[frameId] = frameActions;
-        }
-
-        ExecuteTacticalRound(playerDecisions);
-    }
-
-    private void AIDecides_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_isTacticalMode) return;
-
-        var playerDecisions = new RoundTacticalDecision();
-        var ai = new CombatAI();
-        var actionSystem = new ActionSystem();
-        var activeEnemies = _enemyFrames.Where(f => !f.IsDestroyed).ToList();
-
-        foreach (var frame in _playerFrames.Where(f => !f.IsDestroyed && !f.IsShutDown))
-        {
-            playerDecisions.FrameOrders[frame.InstanceId] =
-                ai.GenerateActions(frame, activeEnemies, _playerOrders, actionSystem);
-        }
-
-        ExecuteTacticalRound(playerDecisions);
-    }
-
-    private void ExecuteTacticalRound(RoundTacticalDecision playerDecisions)
-    {
-        var round = _combatService.ExecuteRound(
-            _playerFrames, _enemyFrames,
-            playerDecisions, _playerOrders, _enemyOrders, _tacticalRound);
-
-        // Display round events with color
-        AppendRoundHeader(round.RoundNumber);
-        foreach (var evt in round.Events)
-            AppendCombatEvent(evt);
-
-        UpdateFrameLists();
-        _tacticalRound++;
-
-        // Check for auto-resolve
-        if (AutoResolveCheckBox.IsChecked == true)
-        {
-            AppendFeedLine("", "#000000");
-            AppendFeedLine("--- AUTO-RESOLVING ---", "#FFAA00", true);
-
-            var log = _combatService.ExecuteCombat(_playerFrames, _enemyFrames, _playerOrders, _enemyOrders);
-
-            foreach (var r in log.Rounds)
-            {
-                AppendRoundHeader(r.RoundNumber);
-                foreach (var evt in r.Events)
-                    AppendCombatEvent(evt);
-            }
-
-            AppendResultBanner(log.Result);
-            UpdateFrameLists();
-            EndTacticalMode();
-            return;
-        }
-
-        // Show planning for next round
-        ShowTacticalPanel();
-    }
-
-    private void UpdateEnemyStatusDisplay()
-    {
-        var lines = new List<string>();
-        foreach (var frame in _enemyFrames.Where(f => !f.IsDestroyed))
-        {
-            string bar = BuildArmorBar(frame.ArmorPercent, 8);
-            lines.Add($"{frame.CustomName} ({frame.Class[0]}) {bar}");
-        }
-        EnemyStatusText.Text = lines.Count > 0 ? string.Join("\n", lines) : "(all destroyed)";
-    }
-
-    private void EndTacticalMode()
-    {
-        _isTacticalMode = false;
-        SetupPanel.Visibility = Visibility.Visible;
-        TacticalPanel.Visibility = Visibility.Collapsed;
-        StartCombatButton.IsEnabled = true;
-        FrameSelectorButton.IsEnabled = true;
-
-        if (_isCampaignMode)
-            HandlePostCombat();
+        _selectedAction = null;
+        _selectedWeaponGroup = null;
+        _highlightedAttackHexes.Clear();
+        _hoveredTarget = null;
+        _hoveredHex = null;
+        _losLine = null;
+        _losInterveningHexes = null;
+        HexCanvas.Cursor = Cursors.Arrow;
+        MapHeaderLabel.Text = "TACTICAL MAP";
+        RenderFullMap();
     }
 
     #endregion
 
-    #region Button Handlers
+    #region AI Turn Execution
 
-    private void ResetButton_Click(object sender, RoutedEventArgs e)
+    private void ExecuteAITurnWithDelay(CombatFrame frame)
     {
-        if (_isPlayingBack)
+        var events = _combatService.ExecuteAITurn(_combatState!, frame, _enemyOrders);
+        _combatService.EndActivation(_combatState!);
+
+        // Queue events for display with small delays
+        _aiEventQueue = new Queue<CombatEvent>(events);
+        _aiTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _aiTimer.Tick += AIEventTick;
+        _aiTimer.Start();
+    }
+
+    private void AIEventTick(object? sender, EventArgs e)
+    {
+        if (_aiEventQueue == null || !_aiEventQueue.Any())
         {
-            _isCampaignMode = false; // Prevent post-combat on manual reset
-            StopPlayback();
+            _aiTimer?.Stop();
+            _aiTimer = null;
+            RenderFullMap();
+            AdvanceToNextUnit();
+            return;
         }
 
-        _isCampaignMode = false; // Prevent post-combat on manual reset
-        EndTacticalMode();
+        var evt = _aiEventQueue.Dequeue();
+        AppendCombatEvent(evt);
 
-        // Return to HQ if management is available
-        if (_managementService != null)
+        // Refresh map periodically for movement events
+        if (evt.Type == CombatEventType.Movement || evt.Type == CombatEventType.FrameDestroyed)
+            RenderFullMap();
+    }
+
+    #endregion
+
+    #region Player Action Handling
+
+    private void ActionButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_combatState == null || _combatState.ActiveFrame == null || !_combatState.IsPlayerTurn) return;
+
+        var btn = (Button)sender;
+        var tag = btn.Tag?.ToString() ?? "";
+        var frame = _combatState.ActiveFrame;
+
+        switch (tag)
         {
-            OpenManagementWindow();
+            case "Move":
+                _selectedAction = CombatAction.Move;
+                _selectedWeaponGroup = null;
+                _highlightedAttackHexes.Clear();
+                _highlightedMoveHexes = HexPathfinding.GetReachableHexes(
+                    _combatState.Grid, frame.HexPosition, PositioningSystem.GetEffectiveHexMovement(frame));
+                AppendFeedText("Select a hex to move to...", "#888888");
+                break;
+
+            case "Sprint":
+                _selectedAction = CombatAction.Sprint;
+                _selectedWeaponGroup = null;
+                _highlightedAttackHexes.Clear();
+                _highlightedMoveHexes = HexPathfinding.GetReachableHexes(
+                    _combatState.Grid, frame.HexPosition, PositioningSystem.GetSprintRange(frame));
+                AppendFeedText("Select a hex to sprint to...", "#888888");
+                break;
+
+            case "Brace":
+                ExecutePlayerAction(CombatAction.Brace);
+                return;
+
+            case "Overwatch":
+                ExecutePlayerAction(CombatAction.Overwatch);
+                return;
+
+            case "Vent":
+                ExecutePlayerAction(CombatAction.VentReactor);
+                return;
+
+            default:
+                if (tag.StartsWith("Fire_"))
+                {
+                    int groupId = int.Parse(tag.Substring(5));
+                    _selectedAction = CombatAction.FireGroup;
+                    _selectedWeaponGroup = groupId;
+                    _highlightedMoveHexes.Clear();
+
+                    // Highlight enemy hexes in range
+                    int maxRange = GetWeaponGroupMaxRange(frame, groupId);
+                    var enemyIds = _combatState.AliveEnemyFrames.Select(f => f.InstanceId).ToHashSet();
+                    _highlightedAttackHexes = HexPathfinding.GetTargetableHexes(
+                        _combatState.Grid, frame.HexPosition, maxRange, enemyIds);
+                    AppendFeedText($"Select an enemy target for Group {groupId}...", "#888888");
+                }
+                break;
+        }
+
+        RenderFullMap();
+    }
+
+    private void HexCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_combatState == null) return;
+
+        var pos = e.GetPosition(HexCanvas);
+        double adjX = pos.X - _renderOffsetX;
+        double adjY = pos.Y - _renderOffsetY;
+        var clickedHex = HexCoord.FromPixel(adjX, adjY, _hexSize);
+
+        if (!_combatState.Grid.IsValid(clickedHex)) return;
+
+        // Handle deployment phase
+        if (_combatState.Phase == TurnPhase.Deployment)
+        {
+            HandleDeploymentClick(clickedHex);
+            return;
+        }
+
+        // Handle normal combat
+        if (_combatState.ActiveFrame != null && _combatState.IsPlayerTurn)
+            HandleHexClick(clickedHex);
+    }
+
+    private void HandleHexClick(HexCoord hex)
+    {
+        if (_combatState == null || _combatState.ActiveFrame == null) return;
+
+        var frame = _combatState.ActiveFrame;
+
+        if (_selectedAction == CombatAction.Move && _highlightedMoveHexes.Contains(hex))
+        {
+            ExecutePlayerAction(CombatAction.Move, targetHex: hex);
+        }
+        else if (_selectedAction == CombatAction.Sprint && _highlightedMoveHexes.Contains(hex))
+        {
+            ExecutePlayerAction(CombatAction.Sprint, targetHex: hex);
+        }
+        else if (_selectedAction == CombatAction.FireGroup && _highlightedAttackHexes.Contains(hex))
+        {
+            var cell = _combatState.Grid.GetCell(hex);
+            if (cell?.OccupantFrameId != null)
+            {
+                AudioService.PlayFire();
+                ExecutePlayerAction(CombatAction.FireGroup, targetFrameId: cell.OccupantFrameId, weaponGroupId: _selectedWeaponGroup);
+            }
+        }
+    }
+
+    private void HexCanvas_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (_combatState?.Grid == null || _selectedAction != CombatAction.FireGroup) return;
+        if (_combatState.ActiveFrame == null || !_combatState.IsPlayerTurn) return;
+
+        var pos = e.GetPosition(HexCanvas);
+        double adjX = pos.X - _renderOffsetX;
+        double adjY = pos.Y - _renderOffsetY;
+        var hex = HexCoord.FromPixel(adjX, adjY, _hexSize);
+
+        if (_hoveredHex.HasValue && _hoveredHex.Value == hex) return; // same hex, skip
+        _hoveredHex = hex;
+
+        var attacker = _combatState.ActiveFrame;
+
+        // Check if hovered hex has a targetable enemy
+        if (_highlightedAttackHexes.Contains(hex))
+        {
+            var cell = _combatState.Grid.GetCell(hex);
+            if (cell?.OccupantFrameId != null)
+            {
+                var target = _combatState.AllFrames.FirstOrDefault(f => f.InstanceId == cell.OccupantFrameId);
+                if (target != null && !target.IsDestroyed && _combatState.EnemyFrames.Contains(target))
+                {
+                    _hoveredTarget = target;
+                    _losLine = HexCoord.LineDraw(attacker.HexPosition, target.HexPosition);
+                    var (_, intervening) = _combatState.Grid.GetLOSPenalty(attacker.HexPosition, target.HexPosition);
+                    _losInterveningHexes = intervening;
+                    RenderFullMap();
+                    ShowTargetingInfo(attacker, target);
+                    HexCanvas.Cursor = Cursors.Cross;
+                    return;
+                }
+            }
+        }
+
+        // Not over a valid target — clear targeting visuals
+        if (_hoveredTarget != null)
+        {
+            _hoveredTarget = null;
+            _losLine = null;
+            _losInterveningHexes = null;
+            RenderFullMap();
+            HexCanvas.Cursor = Cursors.Arrow;
+            MapHeaderLabel.Text = "TACTICAL MAP";
+        }
+    }
+
+    private void HexCanvas_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (_hoveredTarget != null)
+        {
+            _hoveredTarget = null;
+            _hoveredHex = null;
+            _losLine = null;
+            _losInterveningHexes = null;
+            RenderFullMap();
+            HexCanvas.Cursor = Cursors.Arrow;
+            MapHeaderLabel.Text = "TACTICAL MAP";
+        }
+    }
+
+    private void ShowTargetingInfo(CombatFrame attacker, CombatFrame target)
+    {
+        int hexDistance = HexCoord.Distance(attacker.HexPosition, target.HexPosition);
+
+        // Get best weapon group breakdown
+        if (!_selectedWeaponGroup.HasValue) return;
+        if (!attacker.WeaponGroups.TryGetValue(_selectedWeaponGroup.Value, out var weapons)) return;
+        if (!weapons.Any()) return;
+
+        var bestWeapon = weapons.OrderByDescending(w => w.Damage).First();
+        var breakdown = _combatService.GetHitChanceBreakdown(attacker, target, bestWeapon, hexDistance, _combatState!.Grid);
+
+        var parts = new List<string>();
+        parts.Add($"TARGET: {target.CustomName} | {hexDistance} hex | {breakdown.FinalHitChance}% hit");
+        parts.Add($"  Base {breakdown.BaseAccuracy}%");
+        if (breakdown.GunneryBonus != 0) parts.Add($"+{breakdown.GunneryBonus} gun");
+        if (breakdown.RangeModifier != 0) parts.Add($"{(breakdown.RangeModifier >= 0 ? "+" : "")}{breakdown.RangeModifier} rng");
+        if (breakdown.EvasionPenalty != 0) parts.Add($"-{breakdown.EvasionPenalty} eva");
+        if (breakdown.TerrainDefense != 0) parts.Add($"-{breakdown.TerrainDefense} cover");
+        if (breakdown.LOSPenalty != 0) parts.Add($"-{breakdown.LOSPenalty} LOS");
+        if (breakdown.BraceBonus != 0) parts.Add($"-{breakdown.BraceBonus} brace");
+        if (breakdown.SensorPenalty != 0) parts.Add($"-{breakdown.SensorPenalty} sensor");
+        if (breakdown.ActuatorPenalty != 0) parts.Add($"-{breakdown.ActuatorPenalty} arm");
+
+        MapHeaderLabel.Text = string.Join(" | ", parts);
+    }
+
+    private void ExecutePlayerAction(CombatAction action, HexCoord? targetHex = null,
+        int? targetFrameId = null, int? weaponGroupId = null)
+    {
+        if (_combatState?.ActiveFrame == null) return;
+
+        var frame = _combatState.ActiveFrame;
+        var events = _combatService.ExecutePlayerAction(_combatState, frame, action,
+            targetHex, targetFrameId, weaponGroupId);
+
+        DisplayEvents(events);
+        ClearSelectedAction();
+
+        // Check if frame still has AP
+        if (frame.ActionPoints <= 0 || frame.IsDestroyed)
+        {
+            _combatService.EndActivation(_combatState);
+            HideActionButtons();
+            AdvanceToNextUnit();
         }
         else
         {
-            InitializeTestScenario();
-            ClearFeed();
-            AppendFeedLine("Combat reset. Ready.", "#00FF00");
+            // Refresh UI for remaining AP
+            ShowPlayerTurnUI(frame);
         }
     }
 
-    private void FrameSelectorButton_Click(object sender, RoutedEventArgs e)
+    private void EndTurn_Click(object sender, RoutedEventArgs e)
     {
-        var frameSelectorWindow = new FrameSelectorWindow(_dbContext);
+        if (_combatState == null) return;
+        _combatService.EndActivation(_combatState);
+        HideActionButtons();
+        ClearSelectedAction();
+        AdvanceToNextUnit();
+    }
 
-        if (frameSelectorWindow.ShowDialog() == true)
+    private void AutoResolveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_combatState == null) return;
+
+        // Stop any AI animation
+        _aiTimer?.Stop();
+
+        AppendFeedText("=== AUTO-RESOLVING COMBAT ===", "#FFAA00");
+
+        var log = _combatService.AutoResolveCombat(_combatState, _playerOrders, _enemyOrders);
+
+        foreach (var round in log.Rounds)
         {
-            var selectedChassis = frameSelectorWindow.SelectedChassis;
-            var selectedLoadout = frameSelectorWindow.SelectedLoadout;
+            AppendFeedText($"--- Round {round.RoundNumber} ---", "#666666");
+            foreach (var evt in round.Events)
+                AppendCombatEvent(evt);
+        }
 
-            if (selectedChassis != null)
+        RenderFullMap();
+        EndCombat();
+    }
+
+    private void WithdrawButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_combatState == null) return;
+
+        _combatState.Result = CombatResult.Withdrawal;
+        AppendFeedText("Player forces withdraw from combat!", "#FF6600");
+        EndCombat();
+    }
+
+    #endregion
+
+    #region Combat End
+
+    private void EndCombat()
+    {
+        if (_combatState == null) return;
+
+        string resultText = _combatState.Result switch
+        {
+            CombatResult.Victory => "VICTORY!",
+            CombatResult.Defeat => "DEFEAT",
+            CombatResult.Withdrawal => "WITHDRAWAL",
+            CombatResult.Stalemate => "STALEMATE",
+            _ => "COMBAT OVER"
+        };
+
+        string resultColor = _combatState.Result == CombatResult.Victory ? "#00FF00" : "#FF4444";
+
+        if (_combatState.Result == CombatResult.Victory)
+            AudioService.PlayVictory();
+        else
+            AudioService.PlayDefeat();
+
+        AppendFeedText($"=== {resultText} ===", resultColor);
+
+        HideActionButtons();
+        ActiveUnitHeader.Text = resultText;
+        ActiveUnitInfo.Text = "";
+        WeaponGroupsText.Text = "";
+        TurnOrderPanel.Children.Clear();
+
+        AutoResolveButton.Visibility = Visibility.Collapsed;
+        WithdrawButton.Visibility = Visibility.Collapsed;
+        ResetButton.Visibility = Visibility.Visible;
+
+        if (_isCampaignMode)
+        {
+            HandlePostCombat();
+        }
+    }
+
+    #endregion
+
+    #region Hex Map Rendering
+
+    private void HexCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        RenderFullMap();
+    }
+
+    private void RenderFullMap()
+    {
+        HexCanvas.Children.Clear();
+        if (_combatState?.Grid == null) return;
+
+        double canvasW = HexCanvas.ActualWidth;
+        double canvasH = HexCanvas.ActualHeight;
+        if (canvasW < 10 || canvasH < 10) return;
+
+        var grid = _combatState.Grid;
+        double margin = 15;
+
+        // Pointy-top hex sizing: width = sqrt(3)*size, height = 2*size
+        double sqrt3 = Math.Sqrt(3.0);
+        double hexSizeFromW = (canvasW - margin * 2) / (sqrt3 * (grid.Width + 0.5));
+        double hexSizeFromH = (canvasH - margin * 2) / (1.5 * (grid.Height - 1) + 2.0);
+        _hexSize = Math.Min(hexSizeFromW, hexSizeFromH);
+        _hexSize = Math.Max(_hexSize, 8);
+
+        // Calculate total grid pixel bounds to center it
+        double minX = double.MaxValue, minY = double.MaxValue;
+        double maxX = double.MinValue, maxY = double.MinValue;
+
+        foreach (var cell in grid.AllCells)
+        {
+            var (px, py) = cell.Coord.ToPixel(_hexSize);
+            double halfW = sqrt3 * _hexSize / 2.0;
+            minX = Math.Min(minX, px - halfW);
+            maxX = Math.Max(maxX, px + halfW);
+            minY = Math.Min(minY, py - _hexSize);
+            maxY = Math.Max(maxY, py + _hexSize);
+        }
+
+        double gridW = maxX - minX;
+        double gridH = maxY - minY;
+        _renderOffsetX = (canvasW - gridW) / 2 - minX;
+        _renderOffsetY = (canvasH - gridH) / 2 - minY;
+
+        // Draw terrain hex tiles (landscape-aware images) or fallback polygons
+        double hexW = sqrt3 * _hexSize;
+        double hexH = 2.0 * _hexSize;
+        string landscape = grid.Landscape;
+        var activeTiles = GetTilesForLandscape(landscape);
+
+        foreach (var cell in grid.AllCells)
+        {
+            var (px, py) = cell.Coord.ToPixel(_hexSize);
+            double cx = px + _renderOffsetX;
+            double cy = py + _renderOffsetY;
+
+            if (activeTiles.TryGetValue(cell.Terrain, out var tileBmp))
             {
-                var newFrame = CreateCombatFrameFromSelection(selectedChassis, selectedLoadout);
+                // Render tile image — tiles are pointy-top hex PNGs with transparent corners
+                var img = new Image
+                {
+                    Source = tileBmp,
+                    Width = hexW + 1,   // +1 to eliminate hairline gaps
+                    Height = hexH + 1,
+                    Stretch = Stretch.Fill,
+                    IsHitTestVisible = false
+                };
+                Canvas.SetLeft(img, cx - (hexW + 1) / 2);
+                Canvas.SetTop(img, cy - (hexH + 1) / 2);
+                HexCanvas.Children.Add(img);
+            }
+            else
+            {
+                // Fallback: colored polygon (landscape-aware)
+                var (fill, border, _) = GetTerrainColors(cell.Terrain, landscape);
+                var polygon = CreateHexPolygon(cx, cy, _hexSize, fill, border, 0.8);
+                HexCanvas.Children.Add(polygon);
+            }
+        }
 
-                if (_playerFrames.Count < 4)
-                    _playerFrames.Add(newFrame);
+        // Draw deployment zone highlights
+        if (_combatState.Phase == TurnPhase.Deployment)
+        {
+            foreach (var coord in _deploymentZoneHexes)
+            {
+                if (_combatState.Grid.IsOccupied(coord)) continue;
+                var (dpx, dpy) = coord.ToPixel(_hexSize);
+                double dcx = dpx + _renderOffsetX;
+                double dcy = dpy + _renderOffsetY;
+                var overlay = CreateHexPolygon(dcx, dcy, _hexSize * 0.92,
+                    new SolidColorBrush(Color.FromArgb(60, 0, 120, 220)),
+                    new SolidColorBrush(Color.FromArgb(160, 0, 160, 255)), 1.5);
+                HexCanvas.Children.Add(overlay);
+            }
+        }
+
+        // Draw highlight overlays (semi-transparent polygons on top of tiles)
+        foreach (var coord in _highlightedMoveHexes)
+        {
+            var (px, py) = coord.ToPixel(_hexSize);
+            double cx = px + _renderOffsetX;
+            double cy = py + _renderOffsetY;
+            var overlay = CreateHexPolygon(cx, cy, _hexSize * 0.95,
+                new SolidColorBrush(Color.FromArgb(100, 0, 200, 60)),
+                new SolidColorBrush(Color.FromArgb(160, 0, 255, 0)), 1.5);
+            HexCanvas.Children.Add(overlay);
+        }
+
+        foreach (var coord in _highlightedAttackHexes)
+        {
+            var (px, py) = coord.ToPixel(_hexSize);
+            double cx = px + _renderOffsetX;
+            double cy = py + _renderOffsetY;
+            var overlay = CreateHexPolygon(cx, cy, _hexSize * 0.95,
+                new SolidColorBrush(Color.FromArgb(100, 200, 30, 30)),
+                new SolidColorBrush(Color.FromArgb(160, 255, 0, 0)), 1.5);
+            HexCanvas.Children.Add(overlay);
+        }
+
+        // Draw LOS line when targeting
+        if (_losLine != null && _losLine.Count >= 2 && _hoveredTarget != null)
+        {
+            var interveningSet = _losInterveningHexes?
+                .ToDictionary(h => h.coord, h => h.penalty) ?? new();
+
+            // Draw line segments connecting hex centers
+            for (int i = 0; i < _losLine.Count - 1; i++)
+            {
+                var (p1x, p1y) = _losLine[i].ToPixel(_hexSize);
+                var (p2x, p2y) = _losLine[i + 1].ToPixel(_hexSize);
+                var line = new Line
+                {
+                    X1 = p1x + _renderOffsetX, Y1 = p1y + _renderOffsetY,
+                    X2 = p2x + _renderOffsetX, Y2 = p2y + _renderOffsetY,
+                    Stroke = new SolidColorBrush(Color.FromArgb(180, 255, 255, 0)),
+                    StrokeThickness = 2,
+                    StrokeDashArray = new DoubleCollection { 4, 2 },
+                    IsHitTestVisible = false
+                };
+                HexCanvas.Children.Add(line);
+            }
+
+            // Highlight intervening hexes that cause penalty (skip first and last)
+            for (int i = 1; i < _losLine.Count - 1; i++)
+            {
+                var coord = _losLine[i];
+                var (lx, ly) = coord.ToPixel(_hexSize);
+                double lcx = lx + _renderOffsetX;
+                double lcy = ly + _renderOffsetY;
+
+                if (interveningSet.TryGetValue(coord, out int penalty))
+                {
+                    // Red-tinted overlay for blocking terrain
+                    var overlay = CreateHexPolygon(lcx, lcy, _hexSize * 0.85,
+                        new SolidColorBrush(Color.FromArgb(80, 255, 60, 0)),
+                        new SolidColorBrush(Color.FromArgb(200, 255, 100, 0)), 1.5);
+                    HexCanvas.Children.Add(overlay);
+
+                    // Penalty text
+                    if (_hexSize >= 14)
+                    {
+                        var penaltyText = new TextBlock
+                        {
+                            Text = $"-{penalty}",
+                            FontSize = Math.Max(8, _hexSize * 0.35),
+                            FontFamily = new FontFamily("Consolas"),
+                            FontWeight = FontWeights.Bold,
+                            Foreground = new SolidColorBrush(Color.FromRgb(255, 120, 0)),
+                            TextAlignment = TextAlignment.Center
+                        };
+                        penaltyText.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                        Canvas.SetLeft(penaltyText, lcx - penaltyText.DesiredSize.Width / 2);
+                        Canvas.SetTop(penaltyText, lcy - penaltyText.DesiredSize.Height / 2);
+                        HexCanvas.Children.Add(penaltyText);
+                    }
+                }
                 else
-                    _playerFrames[_playerFrames.Count - 1] = newFrame;
-
-                UpdateFrameLists();
-
-                var weaponSummary = string.Join(", ",
-                    newFrame.WeaponGroups.SelectMany(g =>
-                        g.Value.Select(w => $"[G{g.Key}] {w.Name}")));
-
-                ClearFeed();
-                AppendFeedLine($"Frame added: {newFrame.CustomName}", "#00FF00", true);
-                AppendFeedLine($"  {selectedChassis.Designation} {selectedChassis.Name}", "#00AA00");
-                AppendFeedLine($"  Reactor: {newFrame.ReactorOutput}  Move: {newFrame.MovementEnergyCost}E", "#008800");
-                AppendFeedLine($"  Weapons: {weaponSummary}", "#008800");
+                {
+                    // Clear line-of-sight hex — subtle green dot
+                    var clearOverlay = CreateHexPolygon(lcx, lcy, _hexSize * 0.3,
+                        new SolidColorBrush(Color.FromArgb(60, 200, 255, 0)),
+                        Brushes.Transparent, 0);
+                    HexCanvas.Children.Add(clearOverlay);
+                }
             }
+        }
+
+        // Draw unit shapes (only those with a position assigned)
+        foreach (var frame in _combatState.AllFrames.Where(f => !f.IsDestroyed && f.HexPosition != default(HexCoord)))
+        {
+            var (px, py) = frame.HexPosition.ToPixel(_hexSize);
+            double cx = px + _renderOffsetX;
+            double cy = py + _renderOffsetY;
+
+            bool isPlayer = _combatState.PlayerFrames.Contains(frame);
+            bool isActive = frame == _combatState.ActiveFrame;
+
+            DrawUnitShape(cx, cy, frame, isPlayer, isActive);
+        }
+
+        // Draw active unit highlight border
+        if (_combatState.ActiveFrame != null && !_combatState.ActiveFrame.IsDestroyed
+            && _combatState.IsPlayerTurn)
+        {
+            var (px, py) = _combatState.ActiveFrame.HexPosition.ToPixel(_hexSize);
+            double cx = px + _renderOffsetX;
+            double cy = py + _renderOffsetY;
+
+            var highlight = CreateHexPolygon(cx, cy, _hexSize + 2,
+                Brushes.Transparent,
+                new SolidColorBrush(Color.FromRgb(0, 255, 0)),
+                2.5);
+            HexCanvas.Children.Add(highlight);
         }
     }
 
-    private CombatFrame CreateCombatFrameFromSelection(
-        MechanizedArmourCommander.Data.Models.Chassis chassis,
-        Dictionary<string, MechanizedArmourCommander.Data.Models.Weapon?> loadout)
+    private static (SolidColorBrush fill, SolidColorBrush border, string label) GetTerrainColors(HexTerrain terrain, string landscape = "Habitable")
     {
-        var instanceId = _playerFrames.Any() ? _playerFrames.Max(f => f.InstanceId) + 1 : 1;
-
-        var frame = new CombatFrame
+        // Station/Industrial: gray metal and blue-lit palette
+        if (landscape is "Station" or "Industrial")
         {
-            InstanceId = instanceId,
-            CustomName = $"Frame-{instanceId}",
-            ChassisDesignation = chassis.Designation,
-            ChassisName = chassis.Name,
-            Class = chassis.Class,
-            ReactorOutput = chassis.ReactorOutput,
-            CurrentEnergy = chassis.ReactorOutput,
-            ReactorStress = 0,
-            MovementEnergyCost = chassis.MovementEnergyCost,
-            Speed = chassis.BaseSpeed,
-            Evasion = chassis.BaseEvasion,
-            PilotCallsign = "Pilot-" + instanceId,
-            PilotGunnery = 5,
-            PilotPiloting = 5,
-            PilotTactics = 5,
-            ActionPoints = 2,
-            MaxActionPoints = 2,
-            CurrentRange = RangeBand.Long,
-            Structure = new Dictionary<HitLocation, int>
+            return terrain switch
             {
-                { HitLocation.Head, chassis.StructureHead },
-                { HitLocation.CenterTorso, chassis.StructureCenterTorso },
-                { HitLocation.LeftTorso, chassis.StructureSideTorso },
-                { HitLocation.RightTorso, chassis.StructureSideTorso },
-                { HitLocation.LeftArm, chassis.StructureArm },
-                { HitLocation.RightArm, chassis.StructureArm },
-                { HitLocation.Legs, chassis.StructureLegs }
-            },
-            MaxStructure = new Dictionary<HitLocation, int>
-            {
-                { HitLocation.Head, chassis.StructureHead },
-                { HitLocation.CenterTorso, chassis.StructureCenterTorso },
-                { HitLocation.LeftTorso, chassis.StructureSideTorso },
-                { HitLocation.RightTorso, chassis.StructureSideTorso },
-                { HitLocation.LeftArm, chassis.StructureArm },
-                { HitLocation.RightArm, chassis.StructureArm },
-                { HitLocation.Legs, chassis.StructureLegs }
-            }
-        };
-
-        DistributeArmorEvenly(frame, chassis.MaxArmorTotal);
-
-        int weaponId = instanceId * 100;
-        int groupCounter = 1;
-        foreach (var (slotKey, weapon) in loadout)
-        {
-            if (weapon == null) continue;
-
-            HitLocation mountLoc = slotKey.StartsWith("Large") ? HitLocation.CenterTorso :
-                                   groupCounter % 2 == 0 ? HitLocation.LeftArm : HitLocation.RightArm;
-
-            if (!frame.WeaponGroups.ContainsKey(groupCounter))
-                frame.WeaponGroups[groupCounter] = new List<EquippedWeapon>();
-
-            frame.WeaponGroups[groupCounter].Add(new EquippedWeapon
-            {
-                WeaponId = weaponId++,
-                Name = weapon.Name,
-                HardpointSize = weapon.HardpointSize,
-                WeaponType = weapon.WeaponType,
-                EnergyCost = weapon.EnergyCost,
-                AmmoPerShot = weapon.AmmoPerShot,
-                AmmoType = weapon.AmmoPerShot > 0 ? weapon.Name.Replace(" ", "") : "",
-                Damage = weapon.Damage,
-                RangeClass = weapon.RangeClass,
-                BaseAccuracy = weapon.BaseAccuracy,
-                WeaponGroup = groupCounter,
-                MountLocation = mountLoc,
-                SpecialEffect = weapon.SpecialEffect
-            });
-
-            if (weapon.AmmoPerShot > 0)
-            {
-                string ammoKey = weapon.Name.Replace(" ", "");
-                frame.AmmoByType[ammoKey] = frame.AmmoByType.GetValueOrDefault(ammoKey) + weapon.AmmoPerShot * 10;
-            }
-
-            groupCounter++;
+                HexTerrain.Rocks  => (new SolidColorBrush(Color.FromRgb(50, 55, 65)),
+                                      new SolidColorBrush(Color.FromRgb(70, 80, 95)), "R"),
+                HexTerrain.Rough  => (new SolidColorBrush(Color.FromRgb(55, 50, 40)),
+                                      new SolidColorBrush(Color.FromRgb(80, 72, 55)), "~"),
+                HexTerrain.Sand   => (new SolidColorBrush(Color.FromRgb(65, 60, 45)),
+                                      new SolidColorBrush(Color.FromRgb(90, 82, 60)), ""),
+                _                 => (new SolidColorBrush(Color.FromRgb(35, 40, 50)),
+                                      new SolidColorBrush(Color.FromRgb(50, 58, 72)), "")
+            };
         }
 
-        return frame;
+        // Default nature palette
+        return terrain switch
+        {
+            HexTerrain.Forest => (new SolidColorBrush(Color.FromRgb(15, 65, 25)),
+                                  new SolidColorBrush(Color.FromRgb(25, 100, 40)), "F"),
+            HexTerrain.Rocks  => (new SolidColorBrush(Color.FromRgb(60, 60, 68)),
+                                  new SolidColorBrush(Color.FromRgb(90, 90, 100)), "R"),
+            HexTerrain.Rough  => (new SolidColorBrush(Color.FromRgb(65, 50, 22)),
+                                  new SolidColorBrush(Color.FromRgb(95, 72, 35)), "~"),
+            HexTerrain.Sand   => (new SolidColorBrush(Color.FromRgb(80, 70, 38)),
+                                  new SolidColorBrush(Color.FromRgb(110, 95, 55)), ""),
+            _                 => (new SolidColorBrush(Color.FromRgb(18, 42, 18)),
+                                  new SolidColorBrush(Color.FromRgb(35, 78, 35)), "")
+        };
     }
 
-    private void DistributeArmorEvenly(CombatFrame frame, int totalArmor)
+    // Pointy-top hex polygon: vertices start at -30 degrees
+    private Polygon CreateHexPolygon(double cx, double cy, double size,
+        Brush fill, Brush stroke, double strokeThickness)
     {
-        var weights = new Dictionary<HitLocation, float>
+        var points = new PointCollection();
+        for (int i = 0; i < 6; i++)
         {
-            { HitLocation.Head, 0.06f },
-            { HitLocation.CenterTorso, 0.22f },
-            { HitLocation.LeftTorso, 0.14f },
-            { HitLocation.RightTorso, 0.14f },
-            { HitLocation.LeftArm, 0.10f },
-            { HitLocation.RightArm, 0.10f },
-            { HitLocation.Legs, 0.24f }
+            double angleDeg = 60.0 * i - 30.0; // pointy-top starts at -30°
+            double angleRad = Math.PI / 180.0 * angleDeg;
+            double px = cx + size * Math.Cos(angleRad);
+            double py = cy + size * Math.Sin(angleRad);
+            points.Add(new Point(px, py));
+        }
+
+        return new Polygon
+        {
+            Points = points,
+            Fill = fill,
+            Stroke = stroke,
+            StrokeThickness = strokeThickness
+        };
+    }
+
+    private void DrawUnitShape(double cx, double cy, CombatFrame frame, bool isPlayer, bool isActive)
+    {
+        double unitRadius = frame.Class switch
+        {
+            "Light" => _hexSize * 0.30,
+            "Medium" => _hexSize * 0.35,
+            "Heavy" => _hexSize * 0.40,
+            "Assault" => _hexSize * 0.45,
+            _ => _hexSize * 0.35
         };
 
-        frame.Armor = new Dictionary<HitLocation, int>();
-        frame.MaxArmor = new Dictionary<HitLocation, int>();
-
-        foreach (var (loc, weight) in weights)
+        int sides = frame.Class switch
         {
-            int armor = (int)(totalArmor * weight);
-            frame.Armor[loc] = armor;
-            frame.MaxArmor[loc] = armor;
+            "Light" => 4,
+            "Medium" => 5,
+            "Heavy" => 6,
+            "Assault" => 8,
+            _ => 5
+        };
+
+        Color fillColor;
+        if (frame.IsDestroyed)
+            fillColor = Color.FromRgb(80, 80, 80);
+        else if (frame.ArmorPercent < 25)
+            fillColor = isPlayer ? Color.FromRgb(200, 150, 0) : Color.FromRgb(200, 80, 0);
+        else
+            fillColor = isPlayer ? Color.FromRgb(0, 180, 0) : Color.FromRgb(200, 50, 50);
+
+        double rotOffset = (frame.Class == "Light") ? 45.0 : 0.0;
+        var points = new PointCollection();
+        for (int i = 0; i < sides; i++)
+        {
+            double angle = (360.0 / sides * i + rotOffset - 90) * Math.PI / 180.0;
+            points.Add(new Point(
+                cx + unitRadius * Math.Cos(angle),
+                cy + unitRadius * Math.Sin(angle)));
+        }
+
+        var shape = new Polygon
+        {
+            Points = points,
+            Fill = new SolidColorBrush(fillColor),
+            Stroke = Brushes.Black,
+            StrokeThickness = 1.5
+        };
+        HexCanvas.Children.Add(shape);
+
+        // Class letter label
+        string label = frame.Class.Length > 0 ? frame.Class[0].ToString() : "?";
+        var textBlock = new TextBlock
+        {
+            Text = label,
+            FontSize = unitRadius * 0.9,
+            FontFamily = new FontFamily("Consolas"),
+            FontWeight = FontWeights.Bold,
+            Foreground = Brushes.Black,
+            TextAlignment = TextAlignment.Center
+        };
+        textBlock.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Canvas.SetLeft(textBlock, cx - textBlock.DesiredSize.Width / 2);
+        Canvas.SetTop(textBlock, cy - textBlock.DesiredSize.Height / 2);
+        HexCanvas.Children.Add(textBlock);
+
+        // Name label below unit
+        if (_hexSize >= 18)
+        {
+            var nameLabel = new TextBlock
+            {
+                Text = frame.CustomName.Length > 8 ? frame.CustomName[..8] : frame.CustomName,
+                FontSize = Math.Max(7, _hexSize * 0.28),
+                FontFamily = new FontFamily("Consolas"),
+                Foreground = isPlayer
+                    ? new SolidColorBrush(Color.FromRgb(0, 200, 0))
+                    : new SolidColorBrush(Color.FromRgb(200, 100, 100)),
+                TextAlignment = TextAlignment.Center
+            };
+            nameLabel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            Canvas.SetLeft(nameLabel, cx - nameLabel.DesiredSize.Width / 2);
+            Canvas.SetTop(nameLabel, cy + unitRadius + 1);
+            HexCanvas.Children.Add(nameLabel);
+        }
+    }
+
+    #endregion
+
+    #region Turn Order Display
+
+    private void UpdateTurnOrder()
+    {
+        TurnOrderPanel.Children.Clear();
+        if (_combatState == null) return;
+
+        TurnOrderHeader.Text = $"TURN ORDER — ROUND {_combatState.RoundNumber}";
+
+        foreach (var frame in _combatState.InitiativeOrder)
+        {
+            bool isPlayer = _combatState.PlayerFrames.Contains(frame);
+            bool isActive = frame == _combatState.ActiveFrame;
+            bool hasActed = frame.HasActedThisRound;
+
+            string marker = isActive ? " >>>" : (hasActed ? " [done]" : "");
+            string classLetter = frame.Class.Length > 0 ? frame.Class[0].ToString() : "?";
+
+            Color textColor;
+            if (frame.IsDestroyed) textColor = Color.FromRgb(80, 80, 80);
+            else if (isActive) textColor = isPlayer ? Color.FromRgb(0, 255, 0) : Color.FromRgb(255, 100, 100);
+            else if (hasActed) textColor = Color.FromRgb(80, 80, 80);
+            else textColor = isPlayer ? Color.FromRgb(0, 170, 0) : Color.FromRgb(170, 60, 60);
+
+            var tb = new TextBlock
+            {
+                Text = $" {frame.CustomName} ({classLetter}){marker}",
+                FontSize = 9,
+                FontFamily = new FontFamily("Consolas"),
+                Foreground = new SolidColorBrush(textColor),
+                FontWeight = isActive ? FontWeights.Bold : FontWeights.Normal,
+                Margin = new Thickness(0, 1, 0, 0)
+            };
+            TurnOrderPanel.Children.Add(tb);
+        }
+    }
+
+    #endregion
+
+    #region Combat Feed
+
+    private void DisplayEvents(List<CombatEvent> events)
+    {
+        foreach (var evt in events)
+            AppendCombatEvent(evt);
+    }
+
+    private void AppendCombatEvent(CombatEvent evt)
+    {
+        string color = evt.Type switch
+        {
+            CombatEventType.Hit => "#FF8800",
+            CombatEventType.Critical => "#FF0000",
+            CombatEventType.Miss => "#666666",
+            CombatEventType.Movement => "#4488FF",
+            CombatEventType.ComponentDamage => "#FF4400",
+            CombatEventType.AmmoExplosion => "#FF0000",
+            CombatEventType.LocationDestroyed => "#FF2200",
+            CombatEventType.FrameDestroyed => "#FF0000",
+            CombatEventType.ReactorOverload => "#FFAA00",
+            CombatEventType.ReactorShutdown => "#FF6600",
+            CombatEventType.ReactorVent => "#44AAFF",
+            CombatEventType.DamageTransfer => "#CC6600",
+            CombatEventType.Brace => "#00AAFF",
+            CombatEventType.Overwatch => "#00AAFF",
+            CombatEventType.RoundSummary => "#888888",
+            _ => "#00CC00"
+        };
+
+        // Combat sound effects
+        switch (evt.Type)
+        {
+            case CombatEventType.Hit:
+            case CombatEventType.Critical:
+                AudioService.PlayHit();
+                break;
+            case CombatEventType.Miss:
+                AudioService.PlayMiss();
+                break;
+            case CombatEventType.FrameDestroyed:
+                AudioService.PlayDestroyed();
+                break;
+        }
+
+        AppendFeedText(CombatService.FormatEvent(evt), color);
+    }
+
+    private void AppendFeedText(string text, string hexColor)
+    {
+        var color = (Color)ColorConverter.ConvertFromString(hexColor);
+        var tb = new TextBlock
+        {
+            Text = text,
+            FontSize = 9,
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = new SolidColorBrush(color),
+            TextWrapping = TextWrapping.Wrap
+        };
+        CombatFeedPanel.Children.Add(tb);
+        CombatFeedScroller.ScrollToEnd();
+    }
+
+    #endregion
+
+    #region Helpers
+
+    private int GetWeaponGroupMaxRange(CombatFrame frame, int groupId)
+    {
+        if (!frame.WeaponGroups.TryGetValue(groupId, out var weapons))
+            return 0;
+
+        int maxRange = 0;
+        foreach (var w in weapons.Where(w => !w.IsDestroyed))
+        {
+            int range = PositioningSystem.GetWeaponMaxRange(w.RangeClass);
+            if (range > maxRange) maxRange = range;
+        }
+        return maxRange;
+    }
+
+    private void ResetButton_Click(object sender, RoutedEventArgs e)
+    {
+        _aiTimer?.Stop();
+        _isCampaignMode = false;
+        _currentMission = null;
+        _combatState = null;
+        CombatFeedPanel.Children.Clear();
+        TurnOrderPanel.Children.Clear();
+        HexCanvas.Children.Clear();
+        HideActionButtons();
+
+        StartCombatButton.Visibility = Visibility.Visible;
+        AutoResolveButton.Visibility = Visibility.Collapsed;
+        WithdrawButton.Visibility = Visibility.Collapsed;
+        PreCombatPanel.Visibility = Visibility.Visible;
+
+        ActiveUnitHeader.Text = "AWAITING COMBAT";
+        ActiveUnitInfo.Text = "";
+        WeaponGroupsText.Text = "";
+
+        OpenManagementWindow();
+    }
+
+    private void Window_KeyDown(object sender, KeyEventArgs e)
+    {
+        // Space to skip AI animation
+        if (e.Key == Key.Space && _aiTimer != null && _aiTimer.IsEnabled)
+        {
+            _aiTimer.Stop();
+            while (_aiEventQueue != null && _aiEventQueue.Any())
+            {
+                AppendCombatEvent(_aiEventQueue.Dequeue());
+            }
+            _aiTimer = null;
+            RenderFullMap();
+            AdvanceToNextUnit();
         }
     }
 

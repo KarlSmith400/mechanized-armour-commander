@@ -13,6 +13,8 @@ public partial class MainMenuWindow : Window
     public MainMenuWindow()
     {
         InitializeComponent();
+        AddHandler(System.Windows.Controls.Primitives.ButtonBase.ClickEvent,
+            new RoutedEventHandler((_, _) => AudioService.PlayClick()));
         EnsureSaveDirectory();
     }
 

@@ -17,6 +17,10 @@ public class DataSeeder
     private readonly PlayerStateRepository _stateRepo;
     private readonly FactionRepository _factionRepo;
     private readonly FactionStandingRepository _standingRepo;
+    private readonly EquipmentRepository _equipmentRepo;
+    private readonly StarSystemRepository _systemRepo;
+    private readonly PlanetRepository _planetRepo;
+    private readonly JumpRouteRepository _jumpRouteRepo;
 
     public DataSeeder(DatabaseContext context)
     {
@@ -29,6 +33,10 @@ public class DataSeeder
         _stateRepo = new PlayerStateRepository(context);
         _factionRepo = new FactionRepository(context);
         _standingRepo = new FactionStandingRepository(context);
+        _equipmentRepo = new EquipmentRepository(context);
+        _systemRepo = new StarSystemRepository(context);
+        _planetRepo = new PlanetRepository(context);
+        _jumpRouteRepo = new JumpRouteRepository(context);
     }
 
     public void SeedAll(string companyName = "Iron Wolves")
@@ -36,7 +44,11 @@ public class DataSeeder
         SeedFactions();
         SeedFactionStandings();
         SeedWeapons();
+        SeedEquipment();
         SeedChassis();
+        SeedStarSystems();
+        SeedPlanets();
+        SeedJumpRoutes();
         SeedPilots();
         SeedStartingFrames();
         SeedPlayerState(companyName);
@@ -219,7 +231,10 @@ public class DataSeeder
             MissionsCompleted = 0,
             MissionsWon = 0,
             CompanyName = companyName,
-            CurrentDay = 1
+            CurrentDay = 1,
+            CurrentSystemId = 10, // Crossroads
+            CurrentPlanetId = 21, // Junction Station
+            Fuel = 50
         });
     }
 
@@ -507,6 +522,174 @@ public class DataSeeder
         }
     }
 
+    public void SeedEquipment()
+    {
+        var equipment = new List<Equipment>
+        {
+            // === Passive Equipment (no hardpoint, always-on) ===
+
+            new Equipment
+            {
+                Name = "Cooling Vents",
+                Category = "Passive",
+                SpaceCost = 4,
+                EnergyCost = 0,
+                Effect = "ReactorBoost",
+                EffectValue = 3,
+                PurchaseCost = 25000,
+                SalvageValue = 12500,
+                Description = "+3 reactor output per round"
+            },
+            new Equipment
+            {
+                Name = "Reactive Armor",
+                Category = "Passive",
+                SpaceCost = 6,
+                EnergyCost = 0,
+                Effect = "DamageReduction",
+                EffectValue = 15,
+                PurchaseCost = 35000,
+                SalvageValue = 17500,
+                Description = "-15% structure damage taken"
+            },
+            new Equipment
+            {
+                Name = "Ammo Bin",
+                Category = "Passive",
+                SpaceCost = 3,
+                EnergyCost = 0,
+                Effect = "AmmoBonus",
+                EffectValue = 4,
+                PurchaseCost = 15000,
+                SalvageValue = 7500,
+                Description = "+4 reloads for all ballistic/missile weapons"
+            },
+            new Equipment
+            {
+                Name = "Gyro Stabilizer",
+                Category = "Passive",
+                SpaceCost = 5,
+                EnergyCost = 0,
+                Effect = "EvasionReduction",
+                EffectValue = 10,
+                PurchaseCost = 30000,
+                SalvageValue = 15000,
+                Description = "-10% evasion penalty on your attacks"
+            },
+
+            // === Active Equipment (no hardpoint, costs AP + energy to activate) ===
+
+            new Equipment
+            {
+                Name = "Thrust Pack",
+                Category = "Active",
+                SpaceCost = 5,
+                EnergyCost = 4,
+                Effect = "Jump",
+                EffectValue = 3,
+                PurchaseCost = 40000,
+                SalvageValue = 20000,
+                Description = "Jump 3 hexes ignoring terrain (1 AP)"
+            },
+            new Equipment
+            {
+                Name = "Countermeasure Suite",
+                Category = "Active",
+                SpaceCost = 4,
+                EnergyCost = 3,
+                Effect = "ECM",
+                EffectValue = 20,
+                PurchaseCost = 45000,
+                SalvageValue = 22500,
+                Description = "-20% enemy accuracy vs this frame (1 AP, 1 round)"
+            },
+            new Equipment
+            {
+                Name = "Targeting Uplink",
+                Category = "Active",
+                SpaceCost = 3,
+                EnergyCost = 5,
+                Effect = "TargetUplink",
+                EffectValue = 15,
+                PurchaseCost = 50000,
+                SalvageValue = 25000,
+                Description = "+15% accuracy for allies within 4 hexes (1 AP)"
+            },
+            new Equipment
+            {
+                Name = "Barrier Projector",
+                Category = "Active",
+                SpaceCost = 6,
+                EnergyCost = 6,
+                Effect = "Barrier",
+                EffectValue = 20,
+                PurchaseCost = 55000,
+                SalvageValue = 27500,
+                Description = "+20 temp armor to adjacent ally (1 AP)"
+            },
+
+            // === Slot Equipment (uses a hardpoint slot, always-on) ===
+
+            new Equipment
+            {
+                Name = "Sensor Array",
+                Category = "Slot",
+                HardpointSize = "Small",
+                SpaceCost = 2,
+                EnergyCost = 0,
+                Effect = "LongRangeBonus",
+                EffectValue = 10,
+                PurchaseCost = 20000,
+                SalvageValue = 10000,
+                Description = "+10% accuracy at Long range"
+            },
+            new Equipment
+            {
+                Name = "Point Defense System",
+                Category = "Slot",
+                HardpointSize = "Small",
+                SpaceCost = 3,
+                EnergyCost = 2,
+                Effect = "MissileDefense",
+                EffectValue = 50,
+                PurchaseCost = 35000,
+                SalvageValue = 17500,
+                Description = "50% chance to negate incoming missile hit"
+            },
+            new Equipment
+            {
+                Name = "Phantom Emitter",
+                Category = "Slot",
+                HardpointSize = "Medium",
+                SpaceCost = 5,
+                EnergyCost = 4,
+                Effect = "RangedECM",
+                EffectValue = 25,
+                PurchaseCost = 60000,
+                SalvageValue = 30000,
+                Description = "-25% enemy accuracy beyond 5 hexes"
+            },
+            new Equipment
+            {
+                Name = "Stealth Plating",
+                Category = "Slot",
+                HardpointSize = "Large",
+                SpaceCost = 10,
+                EnergyCost = 0,
+                Effect = "StealthPlating",
+                EffectValue = 20,
+                PurchaseCost = 75000,
+                SalvageValue = 37500,
+                Description = "+20% defense bonus, -1 movement"
+            }
+        };
+
+        foreach (var eq in equipment)
+        {
+            _equipmentRepo.Insert(eq);
+        }
+    }
+
     public void SeedChassis()
     {
         var chassisList = new List<Chassis>
@@ -791,6 +974,202 @@ public class DataSeeder
         foreach (var chassis in chassisList)
         {
             _chassisRepo.Insert(chassis);
+        }
+    }
+
+    public void SeedStarSystems()
+    {
+        // Faction IDs: 1=Crucible, 2=Directorate, 3=Outer Reach
+        // X/Y coordinates for future graphical star map rendering
+        var systems = new List<StarSystem>
+        {
+            // === Terran Directorate (Core) ===
+            new StarSystem { Name = "Sol", X = 300, Y = 50, ControllingFactionId = 2, SystemType = "Core",
+                Description = "Humanity's birthplace. Seat of the Terran Directorate and High Command." },
+            new StarSystem { Name = "Terra Nova", X = 500, Y = 50, ControllingFactionId = 2, SystemType = "Core",
+                Description = "Core colony world with major military shipyards and training academies." },
+            new StarSystem { Name = "Centauri Gate", X = 500, Y = 200, ControllingFactionId = 2, SystemType = "Colony",
+                Description = "Border garrison system. Primary gate hub connecting core space to the frontier." },
+
+            // === Crucible Industries (Mid-rim) ===
+            new StarSystem { Name = "Avalon", X = 200, Y = 400, ControllingFactionId = 1, SystemType = "Colony",
+                Description = "Crucible Industries capital. Home to Foundry Station and vast mineral wealth." },
+            new StarSystem { Name = "Forge", X = 50, Y = 350, ControllingFactionId = 1, SystemType = "Colony",
+                Description = "Heavy industrial manufacturing hub. Crucible's primary weapons production." },
+            new StarSystem { Name = "Meridian", X = 150, Y = 250, ControllingFactionId = 1, SystemType = "Colony",
+                Description = "Corporate R&D center. Backdoor jump route connects to Sol." },
+
+            // === Outer Reach Collective (Fringe) ===
+            new StarSystem { Name = "Haven", X = 550, Y = 400, ControllingFactionId = 3, SystemType = "Frontier",
+                Description = "Collective diplomatic hub. The most orderly of the frontier systems." },
+            new StarSystem { Name = "The Drift", X = 600, Y = 550, ControllingFactionId = 3, SystemType = "Frontier",
+                Description = "Home of the mobile capital station. Nomadic fleet anchorage." },
+            new StarSystem { Name = "Rimward", X = 550, Y = 650, ControllingFactionId = 3, SystemType = "Frontier",
+                Description = "Deep fringe. Rich salvage fields and mineral deposits. Lawless." },
+
+            // === Contested / Independent ===
+            new StarSystem { Name = "Crossroads", X = 350, Y = 300, ControllingFactionId = null, SystemType = "Contested",
+                Description = "Border nexus where all faction territories meet. Mercenary haven." },
+            new StarSystem { Name = "Deadlight", X = 450, Y = 500, ControllingFactionId = null, SystemType = "Contested",
+                Description = "Pirate haven and black market hub. No law, no questions." }
+        };
+
+        foreach (var system in systems)
+        {
+            _systemRepo.Insert(system);
+        }
+    }
+
+    public void SeedPlanets()
+    {
+        var planets = new List<Planet>
+        {
+            // === Sol (SystemId=1) ===
+            new Planet { SystemId = 1, Name = "Earth", PlanetType = "Habitable",
+                Description = "Cradle of humanity. Directorate administrative capital.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 3, ContractDifficultyMax = 5 },
+            new Planet { SystemId = 1, Name = "Luna Station", PlanetType = "Station",
+                Description = "Military headquarters orbiting Earth. High Command operations center.",
+                HasMarket = true, HasHiring = false, ContractDifficultyMin = 4, ContractDifficultyMax = 5 },
+            new Planet { SystemId = 1, Name = "Mars Colony", PlanetType = "Industrial",
+                Description = "Terraform-in-progress industrial complex. Frame production facilities.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 2, ContractDifficultyMax = 4 },
+
+            // === Terra Nova (SystemId=2) ===
+            new Planet { SystemId = 2, Name = "New Geneva", PlanetType = "Habitable",
+                Description = "Major colony world. Directorate officer training academies.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 2, ContractDifficultyMax = 4 },
+            new Planet { SystemId = 2, Name = "Dryden Yards", PlanetType = "Station",
+                Description = "Military shipyards. Heavy frame construction and overhaul.",
+                HasMarket = true, HasHiring = false, ContractDifficultyMin = 3, ContractDifficultyMax = 5 },
+
+            // === Centauri Gate (SystemId=3) ===
+            new Planet { SystemId = 3, Name = "Gate Station", PlanetType = "Station",
+                Description = "Primary jump gate hub. Border patrol staging area.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 2, ContractDifficultyMax = 4 },
+            new Planet { SystemId = 3, Name = "Proxima Colony", PlanetType = "Mining",
+                Description = "Mining settlement. Supplies raw materials to the core.",
+                HasMarket = true, HasHiring = false, ContractDifficultyMin = 1, ContractDifficultyMax = 3 },
+
+            // === Avalon (SystemId=4) ===
+            new Planet { SystemId = 4, Name = "Foundry Station", PlanetType = "Station",
+                Description = "Crucible Industries headquarters. Corporate capital of the mid-rim.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 3, ContractDifficultyMax = 5 },
+            new Planet { SystemId = 4, Name = "Avalon Prime", PlanetType = "Habitable",
+                Description = "Resource-rich world. Crucible's showcase colony.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 2, ContractDifficultyMax = 4 },
+            new Planet { SystemId = 4, Name = "Ore Belt", PlanetType = "Mining",
+                Description = "Asteroid mining operation. Primary rare metal source.",
+                HasMarket = false, HasHiring = false, ContractDifficultyMin = 1, ContractDifficultyMax = 3 },
+
+            // === Forge (SystemId=5) ===
+            new Planet { SystemId = 5, Name = "Smelter One", PlanetType = "Industrial",
+                Description = "Massive foundry complex. Weapons and armor manufacturing.",
+                HasMarket = true, HasHiring = false, ContractDifficultyMin = 2, ContractDifficultyMax = 4 },
+            new Planet { SystemId = 5, Name = "Forge Station", PlanetType = "Station",
+                Description = "Orbital depot. Frame assembly and testing facilities.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 2, ContractDifficultyMax = 4 },
+
+            // === Meridian (SystemId=6) ===
+            new Planet { SystemId = 6, Name = "Meridian Labs", PlanetType = "Station",
+                Description = "Crucible R&D station. Prototype weapons and experimental tech.",
+                HasMarket = true, HasHiring = false, ContractDifficultyMin = 3, ContractDifficultyMax = 5 },
+            new Planet { SystemId = 6, Name = "Aether Colony", PlanetType = "Habitable",
+                Description = "Corporate residential colony. Crucible executive retreats.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 1, ContractDifficultyMax = 3 },
+
+            // === Haven (SystemId=7) ===
+            new Planet { SystemId = 7, Name = "Haven Prime", PlanetType = "Habitable",
+                Description = "Collective's diplomatic capital. Most stable frontier world.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 2, ContractDifficultyMax = 4 },
+            new Planet { SystemId = 7, Name = "Port Yarrow", PlanetType = "Station",
+                Description = "Trade station. Crossroads of frontier commerce.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 1, ContractDifficultyMax = 3 },
+
+            // === The Drift (SystemId=8) ===
+            new Planet { SystemId = 8, Name = "The Drift", PlanetType = "Station",
+                Description = "Mobile capital station. Converted colony ship housing the Collective council.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 3, ContractDifficultyMax = 5 },
+            new Planet { SystemId = 8, Name = "Scatter Point", PlanetType = "Outpost",
+                Description = "Salvage depot and nomad anchorage. Fleet repair facilities.",
+                HasMarket = true, HasHiring = false, ContractDifficultyMin = 2, ContractDifficultyMax = 4 },
+
+            // === Rimward (SystemId=9) ===
+            new Planet { SystemId = 9, Name = "Rimward Station", PlanetType = "Outpost",
+                Description = "Deep fringe outpost. Last stop before uncharted space.",
+                HasMarket = true, HasHiring = false, ContractDifficultyMin = 3, ContractDifficultyMax = 5 },
+            new Planet { SystemId = 9, Name = "Junkyard", PlanetType = "Mining",
+                Description = "Salvage fields. Ship and frame wreckage from forgotten battles.",
+                HasMarket = false, HasHiring = false, ContractDifficultyMin = 2, ContractDifficultyMax = 4 },
+
+            // === Crossroads (SystemId=10) ===
+            new Planet { SystemId = 10, Name = "Junction Station", PlanetType = "Station",
+                Description = "Trade hub where faction territories meet. Neutral ground for mercenaries.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 1, ContractDifficultyMax = 3 },
+            new Planet { SystemId = 10, Name = "Freeport", PlanetType = "Station",
+                Description = "Independent mercenary outpost. Contract boards and repair bays.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 1, ContractDifficultyMax = 4 },
+
+            // === Deadlight (SystemId=11) ===
+            new Planet { SystemId = 11, Name = "Deadlight Station", PlanetType = "Station",
+                Description = "Pirate den. No questions asked, no allegiances required.",
+                HasMarket = true, HasHiring = true, ContractDifficultyMin = 2, ContractDifficultyMax = 5 },
+            new Planet { SystemId = 11, Name = "Shadow Market", PlanetType = "Outpost",
+                Description = "Black market depot. Stolen goods and forbidden tech at a premium.",
+                HasMarket = true, HasHiring = false, ContractDifficultyMin = 3, ContractDifficultyMax = 5 }
+        };
+
+        foreach (var planet in planets)
+        {
+            _planetRepo.Insert(planet);
+        }
+    }
+
+    public void SeedJumpRoutes()
+    {
+        // All routes are bidirectional — store both directions for easy querying
+        var routes = new (int from, int to, int distance, int days)[]
+        {
+            // Directorate internal
+            (1, 2, 10, 2),    // Sol ↔ Terra Nova
+            (1, 3, 15, 3),    // Sol ↔ Centauri Gate
+            (2, 3, 10, 2),    // Terra Nova ↔ Centauri Gate
+
+            // Core ↔ Crucible backdoor
+            (1, 6, 20, 3),    // Sol ↔ Meridian
+
+            // Border crossings
+            (3, 10, 15, 3),   // Centauri Gate ↔ Crossroads
+
+            // Crossroads connections
+            (10, 4, 15, 3),   // Crossroads ↔ Avalon
+            (10, 7, 15, 3),   // Crossroads ↔ Haven
+            (10, 11, 10, 2),  // Crossroads ↔ Deadlight
+
+            // Crucible internal
+            (4, 5, 10, 2),    // Avalon ↔ Forge
+            (4, 6, 10, 2),    // Avalon ↔ Meridian
+            (5, 6, 15, 3),    // Forge ↔ Meridian
+
+            // Outer Reach internal
+            (7, 8, 10, 2),    // Haven ↔ The Drift
+            (7, 9, 15, 3),    // Haven ↔ Rimward
+            (8, 9, 10, 2),    // The Drift ↔ Rimward
+
+            // Pirate routes
+            (11, 9, 15, 3),   // Deadlight ↔ Rimward
+            (11, 7, 20, 4),   // Deadlight ↔ Haven
+        };
+
+        foreach (var (from, to, distance, days) in routes)
+        {
+            _jumpRouteRepo.Insert(new JumpRoute
+            {
+                FromSystemId = from,
+                ToSystemId = to,
+                Distance = distance,
+                TravelDays = days
+            });
         }
     }
 }

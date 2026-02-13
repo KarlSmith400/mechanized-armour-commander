@@ -5,13 +5,12 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:MechanizedArmourCommander.UI"
         mc:Ignorable="d"
-        Title="Mechanized Armour Commander - Combat Prototype" Height="950" Width="1250"
+        Title="Mechanized Armour Commander - Combat" Height="950" Width="1300"
         Background="#0D0D0D"
         KeyDown="Window_KeyDown">
-    <Grid Margin="8">
+    <Grid Margin="4">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="220"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -19,293 +18,236 @@
         <!-- Header -->
         <TextBlock Grid.Row="0"
                    Text="MECHANIZED ARMOUR COMMANDER"
-                   FontSize="20"
+                   FontSize="18"
                    FontWeight="Bold"
                    Foreground="#00FF00"
                    FontFamily="Consolas"
                    HorizontalAlignment="Center"
-                   Margin="0,0,0,6"/>
+                   Margin="0,2,0,4"/>
 
-        <!-- Battlefield Map -->
-        <Border Grid.Row="1"
-                BorderBrush="#004400"
-                BorderThickness="1"
-                Background="#050505"
-                Margin="0,0,0,6">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-
-                <Grid Grid.Row="0" Margin="5,3,5,0">
-                    <TextBlock Text="BATTLEFIELD"
-                               FontSize="10"
-                               FontWeight="Bold"
-                               Foreground="#006600"
-                               FontFamily="Consolas"
-                               HorizontalAlignment="Left"/>
-                    <TextBlock x:Name="MapRangeLabel"
-                               FontSize="10"
-                               Foreground="#888888"
-                               FontFamily="Consolas"
-                               HorizontalAlignment="Right"
-                               VerticalAlignment="Center"/>
-                </Grid>
-
-                <Canvas x:Name="BattlefieldCanvas" Grid.Row="1" Margin="5" ClipToBounds="True"/>
-            </Grid>
-        </Border>
-
-        <!-- Main Content: 3 columns -->
-        <Grid Grid.Row="2">
+        <!-- Main Content: 3-column layout -->
+        <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="280"/>
+                <ColumnDefinition Width="260"/>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="240"/>
+                <ColumnDefinition Width="250"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Left Panel: switches between setup and tactical planning -->
+            <!-- Left Sidebar: Active Unit Info + Action Buttons -->
             <Border Grid.Column="0"
                     BorderBrush="#004400"
                     BorderThickness="1"
-                    Margin="0,0,6,0">
-                <Grid>
-                    <!-- Setup panel (shown by default) -->
-                    <StackPanel x:Name="SetupPanel" Margin="8">
-                        <TextBlock Text="PLAYER FORCES"
-                                   FontSize="13"
+                    Margin="0,0,4,0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="LeftPanel" Margin="6">
+                        <!-- Active unit header -->
+                        <TextBlock x:Name="ActiveUnitHeader"
+                                   Text="AWAITING COMBAT"
+                                   FontSize="12"
                                    FontWeight="Bold"
                                    Foreground="#00FF00"
                                    FontFamily="Consolas"
-                                   Margin="0,0,0,6"/>
-                        <ListBox x:Name="PlayerFramesList"
-                                 Background="Transparent"
-                                 Foreground="#00DD00"
-                                 FontFamily="Consolas"
-                                 FontSize="10"
-                                 BorderThickness="0"
-                                 Height="180"/>
+                                   Margin="0,0,0,4"/>
 
-                        <TextBlock Text="MODE"
-                                   FontSize="11"
-                                   FontWeight="Bold"
+                        <!-- Active unit details -->
+                        <TextBlock x:Name="ActiveUnitInfo"
+                                   FontSize="9"
+                                   Foreground="#00CC00"
+                                   FontFamily="Consolas"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,6"/>
+
+                        <!-- Weapon groups display -->
+                        <TextBlock x:Name="WeaponGroupsText"
+                                   FontSize="9"
+                                   Foreground="#00AA00"
+                                   FontFamily="Consolas"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,6"/>
+
+                        <!-- Action buttons -->
+                        <TextBlock x:Name="ActionsLabel"
+                                   Text="ACTIONS"
+                                   FontSize="10" FontWeight="Bold"
                                    Foreground="#006600"
                                    FontFamily="Consolas"
-                                   Margin="0,10,0,4"/>
-                        <CheckBox x:Name="TacticalModeCheckBox"
-                                  Content="Tactical Mode"
-                                  Foreground="#00AA00"
-                                  FontFamily="Consolas"
-                                  FontSize="11"
-                                  Margin="0,0,0,6"/>
-                        <StackPanel x:Name="TacticalOrdersPanel"/>
-                    </StackPanel>
+                                   Visibility="Collapsed"
+                                   Margin="0,0,0,4"/>
 
-                    <!-- Tactical Planning panel (hidden by default) -->
-                    <ScrollViewer x:Name="TacticalPanel" Visibility="Collapsed"
-                                  VerticalScrollBarVisibility="Auto">
-                        <StackPanel Margin="8">
-                            <!-- Round header -->
-                            <TextBlock x:Name="TacticalRoundHeader"
-                                       FontSize="13"
-                                       FontWeight="Bold"
+                        <Button x:Name="BtnMove" Content="MOVE (1 AP)"
+                                Click="ActionButton_Click" Tag="Move"
+                                Style="{x:Null}" Visibility="Collapsed"
+                                Height="28" Margin="0,0,0,2"
+                                FontFamily="Consolas" FontSize="10" FontWeight="Bold"
+                                Background="#001A00" Foreground="#00FF00"
+                                BorderBrush="#004400" BorderThickness="1"/>
+
+                        <Button x:Name="BtnSprint" Content="SPRINT (2 AP)"
+                                Click="ActionButton_Click" Tag="Sprint"
+                                Style="{x:Null}" Visibility="Collapsed"
+                                Height="28" Margin="0,0,0,2"
+                                FontFamily="Consolas" FontSize="10" FontWeight="Bold"
+                                Background="#001A00" Foreground="#00FF00"
+                                BorderBrush="#004400" BorderThickness="1"/>
+
+                        <!-- Dynamic fire buttons -->
+                        <StackPanel x:Name="FireButtonsPanel" Margin="0,0,0,2"/>
+
+                        <Button x:Name="BtnBrace" Content="BRACE (1 AP)"
+                                Click="ActionButton_Click" Tag="Brace"
+                                Style="{x:Null}" Visibility="Collapsed"
+                                Height="28" Margin="0,0,0,2"
+                                FontFamily="Consolas" FontSize="10" FontWeight="Bold"
+                                Background="#001A00" Foreground="#00FF00"
+                                BorderBrush="#004400" BorderThickness="1"/>
+
+                        <Button x:Name="BtnOverwatch" Content="OVERWATCH (1 AP)"
+                                Click="ActionButton_Click" Tag="Overwatch"
+                                Style="{x:Null}" Visibility="Collapsed"
+                                Height="28" Margin="0,0,0,2"
+                                FontFamily="Consolas" FontSize="10" FontWeight="Bold"
+                                Background="#001A00" Foreground="#00FF00"
+                                BorderBrush="#004400" BorderThickness="1"/>
+
+                        <Button x:Name="BtnVent" Content="VENT REACTOR (1 AP)"
+                                Click="ActionButton_Click" Tag="Vent"
+                                Style="{x:Null}" Visibility="Collapsed"
+                                Height="28" Margin="0,0,0,2"
+                                FontFamily="Consolas" FontSize="10" FontWeight="Bold"
+                                Background="#001A00" Foreground="#00FF00"
+                                BorderBrush="#004400" BorderThickness="1"/>
+
+                        <Button x:Name="BtnEndTurn" Content="END TURN"
+                                Click="EndTurn_Click"
+                                Style="{x:Null}" Visibility="Collapsed"
+                                Height="32" Margin="0,6,0,2"
+                                FontFamily="Consolas" FontSize="11" FontWeight="Bold"
+                                Background="#332200" Foreground="#FFAA00"
+                                BorderBrush="#664400" BorderThickness="1"/>
+
+                        <!-- Pre-combat info -->
+                        <StackPanel x:Name="PreCombatPanel">
+                            <TextBlock Text="PLAYER FORCES"
+                                       FontSize="11" FontWeight="Bold"
                                        Foreground="#00FF00"
                                        FontFamily="Consolas"
-                                       Margin="0,0,0,6"/>
-
-                            <!-- Frame selector tabs -->
-                            <WrapPanel x:Name="FrameTabsPanel" Margin="0,0,0,6"/>
-
-                            <!-- Selected frame info -->
-                            <TextBlock x:Name="FrameInfoText"
-                                       FontSize="10"
-                                       Foreground="#00CC00"
-                                       FontFamily="Consolas"
-                                       Margin="0,0,0,6"/>
-
-                            <!-- Planned actions display -->
-                            <Border BorderBrush="#003300" BorderThickness="1"
-                                    Background="#0A0A0A" Padding="4" Margin="0,0,0,6">
-                                <StackPanel>
-                                    <TextBlock Text="PLANNED ACTIONS:"
-                                               FontSize="10" FontWeight="Bold"
-                                               Foreground="#006600"
-                                               FontFamily="Consolas"/>
-                                    <TextBlock x:Name="PlannedActionsText"
-                                               FontSize="10"
-                                               Foreground="#00DD00"
-                                               FontFamily="Consolas"
-                                               Text="  (none)"
-                                               Margin="0,2,0,0"/>
-                                </StackPanel>
-                            </Border>
-
-                            <!-- Action buttons -->
-                            <TextBlock Text="ACTIONS"
-                                       FontSize="10" FontWeight="Bold"
-                                       Foreground="#006600"
-                                       FontFamily="Consolas"
                                        Margin="0,0,0,4"/>
-
-                            <!-- Movement row -->
-                            <WrapPanel Margin="0,0,0,3">
-                                <Button x:Name="BtnMoveClose" Content="CLOSE &gt;&gt;"
-                                        Click="ActionButton_Click" Tag="MoveClose"
-                                        Style="{x:Null}"
-                                        Width="82" Height="28" Margin="0,0,3,0"
-                                        FontFamily="Consolas" FontSize="10" FontWeight="Bold"
-                                        Background="#001A00" Foreground="#00FF00"
-                                        BorderBrush="#004400" BorderThickness="1"/>
-                                <Button x:Name="BtnMovePullBack" Content="&lt;&lt; BACK"
-                                        Click="ActionButton_Click" Tag="MovePullBack"
-                                        Style="{x:Null}"
-                                        Width="82" Height="28" Margin="0,0,3,0"
-                                        FontFamily="Consolas" FontSize="10" FontWeight="Bold"
-                                        Background="#001A00" Foreground="#00FF00"
-                                        BorderBrush="#004400" BorderThickness="1"/>
-                            </WrapPanel>
-
-                            <!-- Fire buttons (dynamic, built per-frame) -->
-                            <WrapPanel x:Name="FireButtonsPanel" Margin="0,0,0,3"/>
-
-                            <!-- Utility actions row -->
-                            <WrapPanel Margin="0,0,0,3">
-                                <Button x:Name="BtnBrace" Content="BRACE"
-                                        Click="ActionButton_Click" Tag="Brace"
-                                        Style="{x:Null}"
-                                        Width="64" Height="28" Margin="0,0,3,0"
-                                        FontFamily="Consolas" FontSize="10" FontWeight="Bold"
-                                        Background="#001A00" Foreground="#00FF00"
-                                        BorderBrush="#004400" BorderThickness="1"/>
-                                <Button x:Name="BtnOverwatch" Content="WATCH"
-                                        Click="ActionButton_Click" Tag="Overwatch"
-                                        Style="{x:Null}"
-                                        Width="64" Height="28" Margin="0,0,3,0"
-                                        FontFamily="Consolas" FontSize="10" FontWeight="Bold"
-                                        Background="#001A00" Foreground="#00FF00"
-                                        BorderBrush="#004400" BorderThickness="1"/>
-                                <Button x:Name="BtnVent" Content="VENT"
-                                        Click="ActionButton_Click" Tag="Vent"
-                                        Style="{x:Null}"
-                                        Width="64" Height="28" Margin="0,0,3,0"
-                                        FontFamily="Consolas" FontSize="10" FontWeight="Bold"
-                                        Background="#001A00" Foreground="#00FF00"
-                                        BorderBrush="#004400" BorderThickness="1"/>
-                            </WrapPanel>
-
-                            <!-- Clear button -->
-                            <Button x:Name="BtnClearActions" Content="CLEAR"
-                                    Click="ClearActions_Click"
-                                    Style="{x:Null}"
-                                    Width="80" Height="24" Margin="0,2,0,6"
-                                    HorizontalAlignment="Left"
-                                    FontFamily="Consolas" FontSize="9" FontWeight="Bold"
-                                    Background="#1A0000" Foreground="#FF6600"
-                                    BorderBrush="#442200" BorderThickness="1"/>
-
-                            <!-- Enemy status summary -->
-                            <TextBlock Text="ENEMY STATUS"
-                                       FontSize="10" FontWeight="Bold"
-                                       Foreground="#660000"
+                            <ListBox x:Name="PlayerFramesList"
+                                     Background="Transparent"
+                                     Foreground="#00DD00"
+                                     FontFamily="Consolas"
+                                     FontSize="9"
+                                     BorderThickness="0"
+                                     Height="160"/>
+                            <TextBlock Text="ENEMY FORCES"
+                                       FontSize="11" FontWeight="Bold"
+                                       Foreground="#FF3333"
                                        FontFamily="Consolas"
-                                       Margin="0,0,0,2"/>
-                            <TextBlock x:Name="EnemyStatusText"
-                                       FontSize="9"
-                                       Foreground="#CC3333"
-                                       FontFamily="Consolas"
-                                       Margin="0,0,0,8"/>
-
-                            <!-- Execute / AI buttons -->
-                            <Button x:Name="BtnExecuteOrders" Content="EXECUTE ORDERS"
-                                    Click="ExecuteOrders_Click"
-                                    Style="{x:Null}"
-                                    Height="32" Margin="0,0,0,4"
-                                    FontFamily="Consolas" FontSize="12" FontWeight="Bold"
-                                    Background="#003300" Foreground="#00FF00"
-                                    BorderBrush="#006600" BorderThickness="1"/>
-                            <Button x:Name="BtnAIDecides" Content="AI DECIDES"
-                                    Click="AIDecides_Click"
-                                    Style="{x:Null}"
-                                    Height="28" Margin="0,0,0,4"
-                                    FontFamily="Consolas" FontSize="10" FontWeight="Bold"
-                                    Background="#001A00" Foreground="#008800"
-                                    BorderBrush="#004400" BorderThickness="1"/>
-                            <CheckBox x:Name="AutoResolveCheckBox"
-                                      Content="Auto-resolve remaining"
-                                      Foreground="#006600"
-                                      FontFamily="Consolas"
-                                      FontSize="9"/>
+                                       Margin="0,8,0,4"/>
+                            <ListBox x:Name="EnemyFramesList"
+                                     Background="Transparent"
+                                     Foreground="#DD3333"
+                                     FontFamily="Consolas"
+                                     FontSize="9"
+                                     BorderThickness="0"
+                                     Height="160"/>
                         </StackPanel>
-                    </ScrollViewer>
-                </Grid>
+                    </StackPanel>
+                </ScrollViewer>
             </Border>
 
-            <!-- Center: Combat Feed (colored events) -->
+            <!-- Center: Hex Map Canvas -->
             <Border Grid.Column="1"
                     BorderBrush="#004400"
                     BorderThickness="1"
-                    Margin="0,0,6,0">
+                    Background="#050505"
+                    Margin="0,0,4,0">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0"
-                               Text="COMBAT FEED"
-                               FontSize="11"
-                               FontWeight="Bold"
-                               Foreground="#006600"
-                               FontFamily="Consolas"
-                               Margin="8,4,8,2"/>
+                    <Grid Grid.Row="0" Margin="6,3,6,0">
+                        <TextBlock x:Name="MapHeaderLabel"
+                                   Text="TACTICAL MAP"
+                                   FontSize="10" FontWeight="Bold"
+                                   Foreground="#006600"
+                                   FontFamily="Consolas"
+                                   HorizontalAlignment="Left"/>
+                        <TextBlock x:Name="RoundLabel"
+                                   FontSize="10"
+                                   Foreground="#888888"
+                                   FontFamily="Consolas"
+                                   HorizontalAlignment="Right"/>
+                    </Grid>
 
-                    <ScrollViewer x:Name="CombatFeedScroller" Grid.Row="1"
-                                  VerticalScrollBarVisibility="Auto"
-                                  Background="#050505"
-                                  MouseDown="CombatFeed_MouseDown">
-                        <StackPanel x:Name="CombatFeedPanel"
-                                    Margin="8,4,8,4"/>
-                    </ScrollViewer>
+                    <Canvas x:Name="HexCanvas" Grid.Row="1"
+                            Margin="4"
+                            ClipToBounds="True"
+                            MouseLeftButtonDown="HexCanvas_MouseLeftButtonDown"
+                            MouseMove="HexCanvas_MouseMove"
+                            MouseLeave="HexCanvas_MouseLeave"
+                            SizeChanged="HexCanvas_SizeChanged"/>
                 </Grid>
             </Border>
 
-            <!-- Right: Enemy Forces -->
+            <!-- Right Sidebar: Turn Order + Combat Feed -->
             <Border Grid.Column="2"
-                    BorderBrush="#440000"
+                    BorderBrush="#004400"
                     BorderThickness="1">
-                <StackPanel Margin="8">
-                    <TextBlock Text="ENEMY FORCES"
-                               FontSize="13"
-                               FontWeight="Bold"
-                               Foreground="#FF3333"
-                               FontFamily="Consolas"
-                               Margin="0,0,0,6"/>
-                    <ListBox x:Name="EnemyFramesList"
-                             Background="Transparent"
-                             Foreground="#DD3333"
-                             FontFamily="Consolas"
-                             FontSize="10"
-                             BorderThickness="0"
-                             Height="200"/>
-                </StackPanel>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Turn Order -->
+                    <StackPanel Grid.Row="0" Margin="6,4,6,0">
+                        <TextBlock x:Name="TurnOrderHeader"
+                                   Text="TURN ORDER"
+                                   FontSize="10" FontWeight="Bold"
+                                   Foreground="#006600"
+                                   FontFamily="Consolas"
+                                   Margin="0,0,0,2"/>
+                        <StackPanel x:Name="TurnOrderPanel"/>
+                    </StackPanel>
+
+                    <!-- Separator -->
+                    <Border Grid.Row="1" Height="1"
+                            Background="#003300" Margin="6,4,6,4"/>
+
+                    <!-- Combat Feed -->
+                    <Grid Grid.Row="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0"
+                                   Text="COMBAT FEED"
+                                   FontSize="10" FontWeight="Bold"
+                                   Foreground="#006600"
+                                   FontFamily="Consolas"
+                                   Margin="6,0,6,2"/>
+
+                        <ScrollViewer x:Name="CombatFeedScroller" Grid.Row="1"
+                                      VerticalScrollBarVisibility="Auto"
+                                      Background="#050505">
+                            <StackPanel x:Name="CombatFeedPanel"
+                                        Margin="6,2,6,2"/>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
             </Border>
         </Grid>
 
         <!-- Bottom Controls -->
-        <StackPanel Grid.Row="3"
+        <StackPanel Grid.Row="2"
                     Orientation="Horizontal"
                     HorizontalAlignment="Center"
-                    Margin="0,6,0,0">
-            <Button x:Name="FrameSelectorButton"
-                    Content="FRAME SELECTOR"
-                    Click="FrameSelectorButton_Click"
-                    Style="{x:Null}"
-                    Width="150" Height="36"
-                    FontFamily="Consolas" FontSize="12" FontWeight="Bold"
-                    Background="#001133" Foreground="#4488FF"
-                    BorderBrush="#003388" BorderThickness="1"
-                    Margin="4"/>
+                    Margin="0,4,0,0">
             <Button x:Name="StartCombatButton"
                     Content="START COMBAT"
                     Click="StartCombatButton_Click"
@@ -315,15 +257,25 @@
                     Background="#003300" Foreground="#00FF00"
                     BorderBrush="#006600" BorderThickness="1"
                     Margin="4"/>
-            <Button x:Name="SkipButton"
-                    Content="SKIP &gt;&gt;"
-                    Click="SkipButton_Click"
+            <Button x:Name="AutoResolveButton"
+                    Content="AUTO RESOLVE"
+                    Click="AutoResolveButton_Click"
                     Visibility="Collapsed"
                     Style="{x:Null}"
-                    Width="100" Height="36"
+                    Width="150" Height="36"
                     FontFamily="Consolas" FontSize="12" FontWeight="Bold"
                     Background="#332200" Foreground="#FFAA00"
                     BorderBrush="#664400" BorderThickness="1"
+                    Margin="4"/>
+            <Button x:Name="WithdrawButton"
+                    Content="WITHDRAW"
+                    Click="WithdrawButton_Click"
+                    Visibility="Collapsed"
+                    Style="{x:Null}"
+                    Width="120" Height="36"
+                    FontFamily="Consolas" FontSize="12" FontWeight="Bold"
+                    Background="#330000" Foreground="#FF4444"
+                    BorderBrush="#660000" BorderThickness="1"
                     Margin="4"/>
             <Button x:Name="ResetButton"
                     Content="RESET"

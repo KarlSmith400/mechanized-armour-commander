@@ -23,6 +23,8 @@ public partial class FrameSelectorWindow : Window
     public FrameSelectorWindow(DatabaseContext dbContext)
     {
         InitializeComponent();
+        AddHandler(System.Windows.Controls.Primitives.ButtonBase.ClickEvent,
+            new RoutedEventHandler((_, _) => AudioService.PlayClick()));
         _dbContext = dbContext;
         _chassisRepo = new ChassisRepository(_dbContext);
         _weaponRepo = new WeaponRepository(_dbContext);

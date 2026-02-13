@@ -4,7 +4,7 @@ using MechanizedArmourCommander.Core.Models;
 namespace MechanizedArmourCommander.Core.Services;
 
 /// <summary>
-/// High-level service for managing combat operations
+/// High-level service for managing hex grid combat operations
 /// </summary>
 public class CombatService
 {
@@ -16,98 +16,98 @@ public class CombatService
     }
 
     /// <summary>
-    /// Initiates and resolves a full combat encounter (auto-resolve)
+    /// Initialize a new combat encounter on a hex grid
     /// </summary>
-    public CombatLog ExecuteCombat(
-        List<CombatFrame> playerFrames,
-        List<CombatFrame> enemyFrames,
-        TacticalOrders? playerOrders = null,
-        TacticalOrders? enemyOrders = null)
+    public CombatState InitializeCombat(List<CombatFrame> playerFrames, List<CombatFrame> enemyFrames, MapSize mapSize, string landscape = "Habitable")
     {
-        playerOrders ??= new TacticalOrders();
-        enemyOrders ??= new TacticalOrders();
-
         if (!playerFrames.Any())
             throw new InvalidOperationException("Player must have at least one frame");
         if (!enemyFrames.Any())
             throw new InvalidOperationException("Combat requires at least one enemy");
 
-        return _engine.ResolveCombat(playerFrames, enemyFrames, playerOrders, enemyOrders);
+        return _engine.InitializeCombat(playerFrames, enemyFrames, mapSize, landscape);
     }
 
     /// <summary>
-    /// Resolves a single round of tactical combat with player decisions
+    /// Initialize combat with manual player deployment
     /// </summary>
-    public CombatRound ExecuteRound(
-        List<CombatFrame> playerFrames,
-        List<CombatFrame> enemyFrames,
-        RoundTacticalDecision playerDecisions,
-        TacticalOrders playerOrders,
-        TacticalOrders enemyOrders,
-        int roundNumber)
+    public CombatState InitializeCombatForDeployment(List<CombatFrame> playerFrames, List<CombatFrame> enemyFrames, MapSize mapSize, string landscape = "Habitable")
     {
-        // Generate AI decisions for enemy frames
-        var enemyDecisions = new RoundTacticalDecision();
-        var ai = new CombatAI();
-        var actionSystem = new ActionSystem();
-        var activePlayerFrames = playerFrames.Where(f => !f.IsDestroyed).ToList();
+        if (!playerFrames.Any())
+            throw new InvalidOperationException("Player must have at least one frame");
+        if (!enemyFrames.Any())
+            throw new InvalidOperationException("Combat requires at least one enemy");
 
-        foreach (var enemy in enemyFrames.Where(f => !f.IsDestroyed))
-        {
-            enemyDecisions.FrameOrders[enemy.InstanceId] =
-                ai.GenerateActions(enemy, activePlayerFrames, enemyOrders, actionSystem);
-        }
-
-        return _engine.ResolveRound(playerFrames, enemyFrames,
-            playerDecisions, enemyDecisions,
-            playerOrders, enemyOrders, roundNumber);
+        return _engine.InitializeCombatForDeployment(playerFrames, enemyFrames, mapSize, landscape);
     }
 
     /// <summary>
-    /// Generates a formatted text output of the combat log
+    /// Start a new round (refresh energy/AP, build initiative)
     /// </summary>
-    public string FormatCombatLog(CombatLog log)
+    public List<CombatEvent> StartRound(CombatState state)
     {
-        var output = new System.Text.StringBuilder();
-        output.AppendLine("=== COMBAT ENGAGEMENT ===");
-        output.AppendLine($"Started: {log.Timestamp:yyyy-MM-dd HH:mm:ss}");
-        output.AppendLine();
-
-        foreach (var round in log.Rounds)
-        {
-            output.AppendLine($"=== ROUND {round.RoundNumber} ===");
-
-            foreach (var evt in round.Events)
-            {
-                output.AppendLine(FormatEvent(evt));
-            }
-
-            output.AppendLine();
-        }
-
-        output.AppendLine($"=== COMBAT RESULT: {log.Result.ToString().ToUpper()} ===");
-        output.AppendLine($"Total Rounds: {log.TotalRounds}");
-
-        return output.ToString();
+        return _engine.StartRound(state);
     }
 
     /// <summary>
-    /// Formats a single round's events for display
+    /// Advance to the next unit in initiative. Returns null if round is over.
     /// </summary>
-    public string FormatRoundEvents(CombatRound round)
+    public CombatFrame? AdvanceActivation(CombatState state)
     {
-        var output = new System.Text.StringBuilder();
-        output.AppendLine($"=== ROUND {round.RoundNumber} ===");
-
-        foreach (var evt in round.Events)
-        {
-            output.AppendLine(FormatEvent(evt));
-        }
-
-        return output.ToString();
+        return _engine.AdvanceActivation(state);
     }
 
-    private string FormatEvent(CombatEvent evt)
+    /// <summary>
+    /// Execute a single player action
+    /// </summary>
+    public List<CombatEvent> ExecutePlayerAction(CombatState state, CombatFrame frame,
+        CombatAction action, HexCoord? targetHex = null, int? targetFrameId = null,
+        int? weaponGroupId = null, HitLocation? calledShotLocation = null)
+    {
+        return _engine.ExecuteAction(state, frame, action, targetHex, targetFrameId, weaponGroupId, calledShotLocation);
+    }
+
+    /// <summary>
+    /// Execute a full AI turn for the given frame
+    /// </summary>
+    public List<CombatEvent> ExecuteAITurn(CombatState state, CombatFrame frame,
+        TacticalOrders? orders = null)
+    {
+        orders ??= new TacticalOrders();
+        return _engine.ExecuteAITurn(state, frame, orders);
+    }
+
+    /// <summary>
+    /// End the current unit's activation and move to next
+    /// </summary>
+    public void EndActivation(CombatState state)
+    {
+        _engine.EndActivation(state);
+    }
+
+    /// <summary>
+    /// Process end-of-round (overwatch, reactor stress, victory check)
+    /// </summary>
+    public List<CombatEvent> EndRound(CombatState state)
+    {
+        return _engine.EndRound(state);
+    }
+
+    /// <summary>
+    /// Auto-resolve entire combat (AI controls all units)
+    /// </summary>
+    public CombatLog AutoResolveCombat(CombatState state,
+        TacticalOrders? playerOrders = null, TacticalOrders? enemyOrders = null)
+    {
+        playerOrders ??= new TacticalOrders();
+        enemyOrders ??= new TacticalOrders();
+        return _engine.ResolveCombat(state, playerOrders, enemyOrders);
+    }
+
+    /// <summary>
+    /// Formats a single combat event for display
+    /// </summary>
+    public static string FormatEvent(CombatEvent evt)
     {
         return evt.Type switch
         {
@@ -131,6 +131,15 @@ public class CombatService
     }
 
     /// <summary>
+    /// Get hit chance breakdown for UI targeting display
+    /// </summary>
+    public HitChanceBreakdown GetHitChanceBreakdown(CombatFrame attacker, CombatFrame target,
+        EquippedWeapon weapon, int hexDistance, HexGrid grid)
+    {
+        return _engine.GetHitChanceBreakdown(attacker, target, weapon, hexDistance, grid);
+    }
+
+    /// <summary>
     /// Formats per-location damage status for a frame
     /// </summary>
     public static string FormatFrameDamageStatus(CombatFrame frame)
@@ -138,7 +147,7 @@ public class CombatService
         var output = new System.Text.StringBuilder();
         output.AppendLine($"{frame.CustomName} ({frame.ChassisDesignation} {frame.ChassisName})");
         output.AppendLine($"  Reactor: {frame.CurrentEnergy}/{frame.EffectiveReactorOutput} energy | Stress: {frame.ReactorStress}");
-        output.AppendLine($"  Range: {PositioningSystem.FormatRangeBand(frame.CurrentRange)} | AP: {frame.ActionPoints}/{frame.MaxActionPoints}");
+        output.AppendLine($"  Position: {frame.HexPosition} | AP: {frame.ActionPoints}/{frame.MaxActionPoints}");
 
         foreach (HitLocation loc in Enum.GetValues<HitLocation>())
         {

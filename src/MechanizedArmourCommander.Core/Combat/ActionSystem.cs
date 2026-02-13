@@ -39,65 +39,41 @@ public class ActionSystem
         frame.MaxActionPoints = frame.HasGyroHit ? 1 : 2;
         frame.ActionPoints = frame.MaxActionPoints;
 
-        // Clear round-start flags
         frame.IsBracing = false;
         frame.IsOnOverwatch = false;
+        frame.HasActedThisRound = false;
     }
 
     /// <summary>
-    /// Checks if a frame can perform a given action
+    /// Checks if a frame can perform a given action (hex-aware)
     /// </summary>
-    public bool CanPerformAction(CombatFrame frame, PlannedAction action, ReactorSystem reactorSystem)
+    public bool CanPerformAction(CombatFrame frame, CombatAction action)
     {
         if (frame.IsDestroyed || frame.IsShutDown)
             return false;
 
-        int cost = GetActionCost(action.Action);
+        int cost = GetActionCost(action);
         if (frame.ActionPoints < cost)
             return false;
 
-        switch (action.Action)
+        switch (action)
         {
             case CombatAction.Move:
-                // Must have energy to move and a valid direction
-                if (action.MoveDirection == null || action.MoveDirection == MovementDirection.Hold)
-                    return false;
-                // Can't move past range band limits
-                if (action.MoveDirection == MovementDirection.Close && frame.CurrentRange == RangeBand.PointBlank)
-                    return false;
-                if (action.MoveDirection == MovementDirection.PullBack && frame.CurrentRange == RangeBand.Long)
-                    return false;
-                // Can't move with destroyed legs
-                if (frame.DestroyedLocations.Contains(HitLocation.Legs))
-                    return false;
-                return true;
+            case CombatAction.Sprint:
+                return !frame.DestroyedLocations.Contains(HitLocation.Legs);
 
             case CombatAction.FireGroup:
-                if (action.WeaponGroupId == null)
-                    return false;
-                if (!frame.WeaponGroups.TryGetValue(action.WeaponGroupId.Value, out var weapons))
-                    return false;
-                // Need at least one functional weapon in the group
-                return weapons.Any(w => !w.IsDestroyed);
+                return frame.WeaponGroups.Any(g => g.Value.Any(w => !w.IsDestroyed));
 
             case CombatAction.CalledShot:
-                if (action.WeaponGroupId == null || action.CalledShotLocation == null)
-                    return false;
-                if (!frame.WeaponGroups.TryGetValue(action.WeaponGroupId.Value, out var calledWeapons))
-                    return false;
-                return calledWeapons.Any(w => !w.IsDestroyed);
-
-            case CombatAction.Sprint:
-                if (frame.DestroyedLocations.Contains(HitLocation.Legs))
-                    return false;
-                if (action.MoveDirection == null || action.MoveDirection == MovementDirection.Hold)
-                    return false;
-                return true;
+                return frame.WeaponGroups.Any(g => g.Value.Any(w => !w.IsDestroyed));
 
             case CombatAction.Brace:
             case CombatAction.Overwatch:
-            case CombatAction.VentReactor:
                 return true;
+
+            case CombatAction.VentReactor:
+                return frame.ReactorStress > 0;
 
             default:
                 return false;

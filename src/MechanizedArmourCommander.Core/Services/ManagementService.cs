@@ -2,6 +2,7 @@ using MechanizedArmourCommander.Core.Models;
 using MechanizedArmourCommander.Data;
 using MechanizedArmourCommander.Data.Models;
 using MechanizedArmourCommander.Data.Repositories;
+using Equipment = MechanizedArmourCommander.Data.Models.Equipment;
 
 namespace MechanizedArmourCommander.Core.Services;
 
@@ -20,6 +21,9 @@ public class ManagementService
     private readonly InventoryRepository _inventoryRepo;
     private readonly FactionRepository _factionRepo;
     private readonly FactionStandingRepository _standingRepo;
+    private readonly EquipmentRepository _equipmentRepo;
+    private readonly EquipmentLoadoutRepository _equipmentLoadoutRepo;
+    private readonly EquipmentInventoryRepository _equipmentInventoryRepo;
 
     public ManagementService(DatabaseContext dbContext)
     {
@@ -33,6 +37,9 @@ public class ManagementService
         _inventoryRepo = new InventoryRepository(dbContext);
         _factionRepo = new FactionRepository(dbContext);
         _standingRepo = new FactionStandingRepository(dbContext);
+        _equipmentRepo = new EquipmentRepository(dbContext);
+        _equipmentLoadoutRepo = new EquipmentLoadoutRepository(dbContext);
+        _equipmentInventoryRepo = new EquipmentInventoryRepository(dbContext);
     }
 
     // === Roster ===
@@ -155,30 +162,33 @@ public class ManagementService
         var frame = _frameRepo.GetById(instanceId);
         var state = _stateRepo.Get();
         if (frame == null || state == null) return false;
-        if (frame.Status != "Damaged") return false;
+        if (frame.Status != "Damaged" && frame.Status != "Destroyed") return false;
         if (state.Credits < frame.RepairCost) return false;
 
         state.Credits -= frame.RepairCost;
+        frame.Status = "Repairing";
+        // RepairTime already set by ApplyPostCombatDamage; for destroyed frames set a longer time
+        if (frame.RepairTime <= 0)
+            frame.RepairTime = 5;
 
-        // Restore armor to max
-        var chassis = frame.Chassis ?? _chassisRepo.GetById(frame.ChassisId);
-        if (chassis != null)
-        {
-            // Distribute armor evenly up to max
-            int maxArmor = chassis.MaxArmorTotal;
-            frame.ArmorHead = (int)(maxArmor * 0.07);
-            frame.ArmorCenterTorso = (int)(maxArmor * 0.20);
-            frame.ArmorLeftTorso = (int)(maxArmor * 0.145);
-            frame.ArmorRightTorso = (int)(maxArmor * 0.145);
-            frame.ArmorLeftArm = (int)(maxArmor * 0.11);
-            frame.ArmorRightArm = (int)(maxArmor * 0.11);
-            frame.ArmorLegs = (int)(maxArmor * 0.22);
-        }
+        _frameRepo.Update(frame);
+        _stateRepo.Update(state);
+        return true;
+    }
 
-        frame.Status = "Ready";
-        frame.RepairCost = 0;
-        frame.RepairTime = 0;
-        frame.ReactorStress = 0;
+    public bool RushRepairFrame(int instanceId)
+    {
+        var frame = _frameRepo.GetById(instanceId);
+        var state = _stateRepo.Get();
+        if (frame == null || state == null) return false;
+        if (frame.Status != "Damaged" && frame.Status != "Destroyed") return false;
+
+        int rushCost = frame.RepairCost * 2;
+        if (state.Credits < rushCost) return false;
+
+        state.Credits -= rushCost;
+        frame.Status = "Repairing";
+        frame.RepairTime = Math.Max(1, (int)Math.Ceiling(frame.RepairTime / 2.0));
 
         _frameRepo.Update(frame);
         _stateRepo.Update(state);
@@ -238,7 +248,15 @@ public class ManagementService
             _inventoryRepo.Insert(slot.WeaponId);
         }
 
+        // Return equipped equipment to inventory
+        var eqLoadout = _equipmentLoadoutRepo.GetByFrameInstance(instanceId);
+        foreach (var eq in eqLoadout)
+        {
+            _equipmentInventoryRepo.Insert(eq.EquipmentId);
+        }
+
         state.Credits += sellPrice;
+        _equipmentLoadoutRepo.DeleteByFrameInstance(instanceId);
         _loadoutRepo.DeleteByFrameInstance(instanceId);
         _frameRepo.Delete(instanceId);
         _stateRepo.Update(state);
@@ -360,6 +378,72 @@ public class ManagementService
         return true;
     }
 
+    // === Equipment ===
+
+    public List<Equipment> GetAllEquipment()
+    {
+        return _equipmentRepo.GetAll();
+    }
+
+    public List<EquipmentLoadout> GetEquipmentLoadout(int instanceId)
+    {
+        return _equipmentLoadoutRepo.GetByFrameInstance(instanceId);
+    }
+
+    public List<EquipmentInventoryItem> GetEquipmentInventory()
+    {
+        return _equipmentInventoryRepo.GetAll();
+    }
+
+    public bool PurchaseEquipment(int equipmentId, float priceModifier = 1.0f)
+    {
+        var equipment = _equipmentRepo.GetById(equipmentId);
+        var state = _stateRepo.Get();
+        if (equipment == null || state == null) return false;
+
+        int price = (int)(equipment.PurchaseCost * priceModifier);
+        if (state.Credits < price) return false;
+
+        state.Credits -= price;
+        _equipmentInventoryRepo.Insert(equipmentId);
+        _stateRepo.Update(state);
+        return true;
+    }
+
+    public bool SellEquipment(int equipmentInventoryId)
+    {
+        var inventory = _equipmentInventoryRepo.GetAll();
+        var item = inventory.FirstOrDefault(i => i.EquipmentInventoryId == equipmentInventoryId);
+        if (item?.Equipment == null) return false;
+
+        var state = _stateRepo.Get();
+        if (state == null) return false;
+
+        state.Credits += item.Equipment.SalvageValue;
+        _equipmentInventoryRepo.Delete(equipmentInventoryId);
+        _stateRepo.Update(state);
+        return true;
+    }
+
+    public void AddEquipmentToInventory(int equipmentId)
+    {
+        _equipmentInventoryRepo.Insert(equipmentId);
+    }
+
+    public void RemoveEquipmentFromInventory(int equipmentInventoryId)
+    {
+        _equipmentInventoryRepo.Delete(equipmentInventoryId);
+    }
+
+    public bool RefitEquipment(int instanceId, List<EquipmentLoadout> newEquipmentLoadout)
+    {
+        var frame = _frameRepo.GetById(instanceId);
+        if (frame == null || frame.Status != "Ready") return false;
+
+        _equipmentLoadoutRepo.ReplaceEquipmentLoadout(instanceId, newEquipmentLoadout);
+        return true;
+    }
+
     // === Pilots ===
 
     public bool HirePilot(out Pilot? newPilot)
@@ -403,12 +487,14 @@ public class ManagementService
 
     // === Day Advancement ===
 
-    public void AdvanceDay()
+    public DayReport AdvanceDay()
     {
         var state = _stateRepo.Get();
-        if (state == null) return;
+        var report = new DayReport();
+        if (state == null) return report;
 
         state.CurrentDay++;
+        report.Day = state.CurrentDay;
 
         // Tick injury timers
         var pilots = _pilotRepo.GetAll();
@@ -419,6 +505,7 @@ public class ManagementService
             {
                 pilot.InjuryDays = 0;
                 pilot.Status = "Active";
+                report.Events.Add($"Pilot \"{pilot.Callsign}\" recovered from injuries");
             }
             _pilotRepo.Update(pilot);
         }
@@ -431,12 +518,45 @@ public class ManagementService
             if (frame.RepairTime <= 0)
             {
                 frame.RepairTime = 0;
+                frame.RepairCost = 0;
+                frame.ReactorStress = 0;
+
+                // Restore armor to max
+                var chassis = frame.Chassis ?? _chassisRepo.GetById(frame.ChassisId);
+                if (chassis != null)
+                {
+                    int maxArmor = chassis.MaxArmorTotal;
+                    frame.ArmorHead = (int)(maxArmor * 0.07);
+                    frame.ArmorCenterTorso = (int)(maxArmor * 0.20);
+                    frame.ArmorLeftTorso = (int)(maxArmor * 0.145);
+                    frame.ArmorRightTorso = (int)(maxArmor * 0.145);
+                    frame.ArmorLeftArm = (int)(maxArmor * 0.11);
+                    frame.ArmorRightArm = (int)(maxArmor * 0.11);
+                    frame.ArmorLegs = (int)(maxArmor * 0.22);
+                }
+
                 frame.Status = "Ready";
+                report.Events.Add($"{frame.CustomName} repairs complete — READY");
             }
             _frameRepo.Update(frame);
         }
 
+        // Deduct daily maintenance for all owned non-destroyed frames
+        int upkeep = 0;
+        foreach (var frame in frames.Where(f => f.Status != "Destroyed"))
+        {
+            var chassis = frame.Chassis ?? _chassisRepo.GetById(frame.ChassisId);
+            if (chassis != null)
+                upkeep += GetMaintenanceCost(chassis.Class);
+        }
+        if (upkeep > 0)
+        {
+            state.Credits -= upkeep;
+            report.MaintenanceCost = upkeep;
+        }
+
         _stateRepo.Update(state);
+        return report;
     }
 
     // === Combat Frame Building ===
@@ -454,16 +574,17 @@ public class ManagementService
             if (frame?.Chassis == null) continue;
 
             var loadout = _loadoutRepo.GetByFrameInstance(instanceId);
+            var equipmentLoadout = _equipmentLoadoutRepo.GetByFrameInstance(instanceId);
             Pilot? pilot = frame.PilotId.HasValue ? _pilotRepo.GetById(frame.PilotId.Value) : null;
 
-            var combatFrame = BuildCombatFrame(frame, loadout, pilot);
+            var combatFrame = BuildCombatFrame(frame, loadout, equipmentLoadout, pilot);
             combatFrames.Add(combatFrame);
         }
 
         return combatFrames;
     }
 
-    private CombatFrame BuildCombatFrame(FrameInstance frame, List<Loadout> loadout, Pilot? pilot)
+    private CombatFrame BuildCombatFrame(FrameInstance frame, List<Loadout> loadout, List<EquipmentLoadout> equipmentLoadout, Pilot? pilot)
     {
         var chassis = frame.Chassis!;
 
@@ -487,7 +608,6 @@ public class ManagementService
             PilotTactics = pilot?.TacticsSkill ?? 2,
             ActionPoints = 2,
             MaxActionPoints = 2,
-            CurrentRange = RangeBand.Long,
             Armor = new Dictionary<HitLocation, int>
             {
                 { HitLocation.Head, frame.ArmorHead },
@@ -572,6 +692,43 @@ public class ManagementService
             }
         }
 
+        // Apply Ammo Bin bonus: +N reloads per ammo-using weapon
+        int ammoBinBonus = 0;
+
+        // Load equipped equipment
+        foreach (var eq in equipmentLoadout)
+        {
+            if (eq.Equipment == null) continue;
+            combatFrame.Equipment.Add(new EquippedEquipment
+            {
+                EquipmentId = eq.EquipmentId,
+                Name = eq.Equipment.Name,
+                Category = eq.Equipment.Category,
+                Effect = eq.Equipment.Effect,
+                EffectValue = eq.Equipment.EffectValue,
+                EnergyCost = eq.Equipment.EnergyCost
+            });
+
+            if (eq.Equipment.Effect == "AmmoBonus")
+                ammoBinBonus += eq.Equipment.EffectValue;
+        }
+
+        // Apply ammo bin bonus to all ammo types
+        if (ammoBinBonus > 0)
+        {
+            foreach (var key in ammoTracker.Keys.ToList())
+            {
+                // Each weapon started with AmmoPerShot * 8; add bonus reloads worth
+                ammoTracker[key] += ammoBinBonus * 5; // 5 rounds per bonus reload
+            }
+        }
+
+        // Apply Stealth Plating movement penalty
+        if (combatFrame.HasEquipment("StealthPlating"))
+        {
+            combatFrame.Speed = Math.Max(1, combatFrame.Speed - 1);
+        }
+
         combatFrame.AmmoByType = ammoTracker;
         return combatFrame;
     }
@@ -620,7 +777,7 @@ public class ManagementService
         {
             frame.Status = "Destroyed";
             frame.RepairCost = GetChassisPrice(chassis); // Full replacement cost
-            frame.RepairTime = 0;
+            frame.RepairTime = 7; // Full rebuild takes a week
             frame.PilotId = null; // Pilot ejected or KIA
         }
         else
@@ -649,4 +806,77 @@ public class ManagementService
 
         _frameRepo.Update(frame);
     }
+
+    // === Upkeep & Deployment Costs ===
+
+    public static int GetMaintenanceCost(string frameClass)
+    {
+        return frameClass switch
+        {
+            "Light" => 500,
+            "Medium" => 1000,
+            "Heavy" => 2000,
+            "Assault" => 3500,
+            _ => 1000
+        };
+    }
+
+    public static int GetDeploymentCostPerFrame(string frameClass)
+    {
+        return frameClass switch
+        {
+            "Light" => 2000,
+            "Medium" => 4000,
+            "Heavy" => 7500,
+            "Assault" => 12000,
+            _ => 4000
+        };
+    }
+
+    public int GetDailyUpkeep()
+    {
+        var frames = _frameRepo.GetAll();
+        int total = 0;
+        foreach (var frame in frames.Where(f => f.Status != "Destroyed"))
+        {
+            var chassis = frame.Chassis ?? _chassisRepo.GetById(frame.ChassisId);
+            if (chassis != null)
+                total += GetMaintenanceCost(chassis.Class);
+        }
+        return total;
+    }
+
+    public int GetDeploymentCost(IEnumerable<int> frameIds)
+    {
+        int total = 0;
+        foreach (var id in frameIds)
+        {
+            var frame = _frameRepo.GetById(id);
+            if (frame == null) continue;
+            var chassis = frame.Chassis ?? _chassisRepo.GetById(frame.ChassisId);
+            if (chassis != null)
+                total += GetDeploymentCostPerFrame(chassis.Class);
+        }
+        return total;
+    }
+
+    public bool DeductDeploymentCost(IEnumerable<int> frameIds)
+    {
+        var state = _stateRepo.Get();
+        if (state == null) return false;
+
+        int cost = GetDeploymentCost(frameIds);
+        if (state.Credits < cost) return false;
+
+        state.Credits -= cost;
+        _stateRepo.Update(state);
+        return true;
+    }
+}
+
+public class DayReport
+{
+    public int Day { get; set; }
+    public int MaintenanceCost { get; set; }
+    public List<string> Events { get; set; } = new();
 }

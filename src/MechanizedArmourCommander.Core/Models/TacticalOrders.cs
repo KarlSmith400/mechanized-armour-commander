@@ -8,7 +8,6 @@ public class TacticalOrders
     public Stance Stance { get; set; } = Stance.Balanced;
     public TargetPriority TargetPriority { get; set; } = TargetPriority.ThreatPriority;
     public WithdrawalThreshold WithdrawalThreshold { get; set; } = WithdrawalThreshold.FightToEnd;
-    public RangeBand PreferredRange { get; set; } = RangeBand.Medium;
 }
 
 /// <summary>

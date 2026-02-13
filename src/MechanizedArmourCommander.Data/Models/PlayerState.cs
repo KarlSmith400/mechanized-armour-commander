@@ -11,4 +11,7 @@ public class PlayerState
     public int MissionsWon { get; set; }
     public string CompanyName { get; set; } = "Iron Wolves";
     public int CurrentDay { get; set; } = 1;
+    public int CurrentSystemId { get; set; } = 10;  // Crossroads
+    public int CurrentPlanetId { get; set; } = 21;  // Junction Station
+    public int Fuel { get; set; } = 50;
 }

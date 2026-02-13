@@ -88,6 +88,13 @@
                             FontFamily="Consolas" FontSize="11" FontWeight="Bold"
                             Background="#001A00" Foreground="#00CC00"
                             BorderBrush="#004400" BorderThickness="1"/>
+                    <Button x:Name="NavGalaxy" Content="GALAXY"
+                            Click="NavButton_Click" Tag="Galaxy"
+                            Style="{x:Null}"
+                            Height="32" Margin="0,0,0,4"
+                            FontFamily="Consolas" FontSize="11" FontWeight="Bold"
+                            Background="#001A00" Foreground="#00CC00"
+                            BorderBrush="#004400" BorderThickness="1"/>
                     <Button x:Name="NavMissions" Content="MISSIONS"
                             Click="NavButton_Click" Tag="Missions"
                             Style="{x:Null}"

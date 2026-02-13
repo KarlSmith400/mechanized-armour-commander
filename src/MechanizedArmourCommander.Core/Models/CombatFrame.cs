@@ -53,20 +53,39 @@ public class CombatFrame
     // Weapon Groups (group number -> weapons in that group)
     public Dictionary<int, List<EquippedWeapon>> WeaponGroups { get; set; } = new();
 
-    // Range band positioning
-    public RangeBand CurrentRange { get; set; } = RangeBand.Long;
+    // Equipped equipment
+    public List<EquippedEquipment> Equipment { get; set; } = new();
 
-    // Display coordinates for battlefield map (UI use)
+    // Hex grid positioning
+    public HexCoord HexPosition { get; set; }
+
+    // Movement range in hexes per Move action (based on weight class)
+    public int HexMovement => Class switch
+    {
+        "Light" => 4,
+        "Medium" => 3,
+        "Heavy" => 2,
+        "Assault" => 1,
+        _ => 2
+    };
+
+    // Display coordinates for battlefield map (UI use, derived from hex position)
     public double MapX { get; set; }
     public double MapY { get; set; }
+
+    // Track if this frame has already acted this round
+    public bool HasActedThisRound { get; set; }
 
     // Combat state flags
     public bool IsBracing { get; set; }
     public bool IsOnOverwatch { get; set; }
+    public bool IsPilotDead { get; set; }        // Pilot killed by head destruction
 
     // State queries
     public bool IsDestroyed => DestroyedLocations.Contains(HitLocation.CenterTorso)
-                             || Structure.GetValueOrDefault(HitLocation.CenterTorso, 0) <= 0;
+                             || Structure.GetValueOrDefault(HitLocation.CenterTorso, 0) <= 0
+                             || IsPilotDead;
+    public bool HasHeadDestroyed => DestroyedLocations.Contains(HitLocation.Head);
 
     public bool HasGyroHit => DamagedComponents.Any(c => c.Type == ComponentDamageType.GyroHit);
     public bool HasSensorHit => DamagedComponents.Any(c => c.Type == ComponentDamageType.SensorHit);
@@ -84,9 +103,13 @@ public class CombatFrame
         get
         {
             int reactorHits = DamagedComponents.Count(c => c.Type == ComponentDamageType.ReactorHit);
-            return Math.Max(1, ReactorOutput - (reactorHits * 3));
+            int reactorBoost = GetEquipmentValue("ReactorBoost");
+            return Math.Max(1, ReactorOutput + reactorBoost - (reactorHits * 3));
         }
     }
+
+    public bool HasEquipment(string effect) => Equipment.Any(e => e.Effect == effect);
+    public int GetEquipmentValue(string effect) => Equipment.Where(e => e.Effect == effect).Sum(e => e.EffectValue);
 
     /// <summary>
     /// Gets all functional (non-destroyed) weapons across all groups
@@ -114,4 +137,18 @@ public class EquippedWeapon
     public HitLocation MountLocation { get; set; }
     public bool IsDestroyed { get; set; }
     public string? SpecialEffect { get; set; }
+}
+
+/// <summary>
+/// Represents equipment installed on a combat frame
+/// </summary>
+public class EquippedEquipment
+{
+    public int EquipmentId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;   // Passive, Active, Slot
+    public string Effect { get; set; } = string.Empty;      // Machine-readable effect key
+    public int EffectValue { get; set; }
+    public int EnergyCost { get; set; }
+    public bool IsActive { get; set; }   // For Active equipment: true when activated this round
 }

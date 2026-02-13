@@ -15,6 +15,8 @@ public partial class PostCombatWindow : Window
     public PostCombatWindow(MissionResults results, Mission? mission, DatabaseContext dbContext)
     {
         InitializeComponent();
+        AddHandler(System.Windows.Controls.Primitives.ButtonBase.ClickEvent,
+            new RoutedEventHandler((_, _) => AudioService.PlayClick()));
         _results = results;
         DisplayResults(results, mission, dbContext);
     }

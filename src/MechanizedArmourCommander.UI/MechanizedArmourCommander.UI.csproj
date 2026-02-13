@@ -4,7 +4,12 @@
     <ProjectReference Include="..\MechanizedArmourCommander.Core\MechanizedArmourCommander.Core.csproj" />
   </ItemGroup>
 
-  <PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Resources\Hex\*.png" />
+    <Resource Include="Resources\Sounds\*.wav" />
+  </ItemGroup>
+
+<PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net9.0-windows</TargetFramework>
     <Nullable>enable</Nullable>

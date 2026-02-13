@@ -17,6 +17,8 @@ public partial class SaveSlotWindow : Window
     public SaveSlotWindow(SaveSlotMode mode, List<SaveSlotInfo> slots)
     {
         InitializeComponent();
+        AddHandler(System.Windows.Controls.Primitives.ButtonBase.ClickEvent,
+            new RoutedEventHandler((_, _) => AudioService.PlayClick()));
         _mode = mode;
         _slots = slots;
 

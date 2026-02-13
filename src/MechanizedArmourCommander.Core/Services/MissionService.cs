@@ -15,6 +15,8 @@ public class MissionService
     private readonly WeaponRepository _weaponRepo;
     private readonly FactionRepository _factionRepo;
     private readonly FactionStandingRepository _standingRepo;
+    private readonly StarSystemRepository _systemRepo;
+    private readonly PlanetRepository _planetRepo;
     private readonly Random _random = new();
 
     private static readonly Dictionary<int, string[]> FactionTitles = new()
@@ -50,16 +52,27 @@ public class MissionService
         _weaponRepo = new WeaponRepository(dbContext);
         _factionRepo = new FactionRepository(dbContext);
         _standingRepo = new FactionStandingRepository(dbContext);
+        _systemRepo = new StarSystemRepository(dbContext);
+        _planetRepo = new PlanetRepository(dbContext);
     }
 
     /// <summary>
-    /// Generates a set of mission contracts scaled to player reputation
+    /// Generates a set of mission contracts scaled to player reputation and current location
     /// </summary>
-    public List<Mission> GenerateContracts(int count, int reputation, List<FactionStanding> standings)
+    public List<Mission> GenerateContracts(int count, int reputation, List<FactionStanding> standings,
+        int? currentSystemId = null, int? currentPlanetId = null)
     {
         var factions = _factionRepo.GetAll();
         var missions = new List<Mission>();
         int baseDifficulty = Math.Clamp(1 + reputation / 5, 1, 4);
+
+        // Get location context for faction biasing
+        StarSystem? currentSystem = currentSystemId.HasValue ? _systemRepo.GetById(currentSystemId.Value) : null;
+        Planet? currentPlanet = currentPlanetId.HasValue ? _planetRepo.GetById(currentPlanetId.Value) : null;
+
+        // Clamp difficulty to planet's allowed range
+        int diffMin = currentPlanet?.ContractDifficultyMin ?? 1;
+        int diffMax = currentPlanet?.ContractDifficultyMax ?? 5;
 
         // Filter out hostile factions as employers
         var availableFactions = factions.Where(f =>
@@ -73,13 +86,25 @@ public class MissionService
 
         for (int i = 0; i < count; i++)
         {
-            var employer = availableFactions[_random.Next(availableFactions.Count)];
+            Faction employer;
+
+            // In faction-controlled systems, 80% chance employer is the controlling faction
+            if (currentSystem?.ControllingFactionId != null
+                && availableFactions.Any(f => f.FactionId == currentSystem.ControllingFactionId)
+                && _random.Next(100) < 80)
+            {
+                employer = availableFactions.First(f => f.FactionId == currentSystem.ControllingFactionId);
+            }
+            else
+            {
+                employer = availableFactions[_random.Next(availableFactions.Count)];
+            }
 
             // Opponent is a different faction
             var opponents = factions.Where(f => f.FactionId != employer.FactionId).ToList();
             var opponent = opponents[_random.Next(opponents.Count)];
 
-            int difficulty = Math.Clamp(baseDifficulty + _random.Next(-1, 2), 1, 5);
+            int difficulty = Math.Clamp(baseDifficulty + _random.Next(-1, 2), diffMin, diffMax);
 
             // Better standing = better pay
             var employerStanding = standings.FirstOrDefault(s => s.FactionId == employer.FactionId);
@@ -91,7 +116,18 @@ public class MissionService
                 _ => 1.0f
             };
 
-            missions.Add(GenerateMission(i + 1, difficulty, employer, opponent, payMultiplier));
+            var mission = GenerateMission(i + 1, difficulty, employer, opponent, payMultiplier);
+
+            // Set landscape from planet type for terrain generation
+            mission.Landscape = currentPlanet?.PlanetType ?? "Habitable";
+
+            // Add location info to mission description
+            if (currentPlanet != null && currentSystem != null)
+            {
+                mission.Description += $" Contract posted at {currentPlanet.Name}, {currentSystem.Name} system.";
+            }
+
+            missions.Add(mission);
         }
 
         return missions;
@@ -116,7 +152,13 @@ public class MissionService
             OpponentFactionId = opponent.FactionId,
             OpponentFactionName = opponent.Name,
             OpponentFactionColor = opponent.Color,
-            OpponentPrefix = opponent.EnemyPrefix
+            OpponentPrefix = opponent.EnemyPrefix,
+            MapSize = difficulty switch
+            {
+                <= 2 => MapSize.Small,
+                3 => MapSize.Medium,
+                _ => MapSize.Large
+            }
         };
 
         // Scale rewards to difficulty with pay multiplier
@@ -230,7 +272,6 @@ public class MissionService
             PilotTactics = Math.Clamp(1 + difficulty, 1, 5),
             ActionPoints = 2,
             MaxActionPoints = 2,
-            CurrentRange = RangeBand.Long,
             Armor = new Dictionary<HitLocation, int>
             {
                 { HitLocation.Head, (int)(maxArmor * 0.07) },
@@ -461,13 +502,23 @@ public class MissionService
             {
                 results.PilotXPGained[frame.PilotId.Value] = baseXP + victoryBonus;
 
-                // Check for pilot injury on frame destruction
-                if (frame.IsDestroyed)
+                // Pilot killed by head destruction — guaranteed KIA
+                if (frame.IsPilotDead)
+                {
+                    results.PilotsKIA.Add(frame.PilotId.Value);
+                }
+                // Frame destroyed (CT breach) — random survival roll
+                else if (frame.IsDestroyed)
                 {
                     if (_random.Next(100) < 30) // 30% KIA chance
                         results.PilotsKIA.Add(frame.PilotId.Value);
                     else
                         results.PilotsInjured.Add(frame.PilotId.Value);
+                }
+                // Head destroyed but pilot survived — injured
+                else if (frame.HasHeadDestroyed)
+                {
+                    results.PilotsInjured.Add(frame.PilotId.Value);
                 }
             }
         }
