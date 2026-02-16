@@ -75,7 +75,7 @@ public partial class SaveSlotWindow : Window
                 });
                 infoPanel.Children.Add(new TextBlock
                 {
-                    Text = $"Day {slot.CurrentDay}  |  ${slot.Credits:N0}  |  {slot.MissionsCompleted} Missions",
+                    Text = $"{new DateTime(2847, 1, 1).AddDays(slot.CurrentDay - 1):dd MMM yyyy}  |  ${slot.Credits:N0}  |  {slot.MissionsCompleted} Missions",
                     FontSize = 10,
                     Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#00AA00")),
                     FontFamily = new FontFamily("Consolas"),

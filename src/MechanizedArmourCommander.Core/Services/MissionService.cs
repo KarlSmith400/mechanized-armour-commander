@@ -257,6 +257,7 @@ public class MissionService
         var frame = new CombatFrame
         {
             InstanceId = instanceId,
+            ChassisId = chassis.ChassisId,
             CustomName = $"Hostile-{instanceId - 100}",
             ChassisDesignation = chassis.Designation,
             ChassisName = chassis.Name,
@@ -394,25 +395,37 @@ public class MissionService
             Outcome = outcome
         };
 
-        // Credits
+        // Payout slider credit modifier
+        float creditMultiplier = mission.PayoutLevel switch
+        {
+            0 => 1.00f,
+            1 => 0.85f,
+            2 => 0.70f,
+            3 => 0.50f,
+            4 => 0.25f,
+            _ => 0.70f
+        };
+        results.PayoutLevel = mission.PayoutLevel;
+
+        // Credits (scaled by payout level)
         if (outcome == CombatResult.Victory)
         {
-            results.CreditsEarned = mission.CreditReward;
+            results.CreditsEarned = (int)(mission.CreditReward * creditMultiplier);
 
             // Bonus for clean victory (no frames destroyed)
             if (playerFrames.All(f => !f.IsDestroyed))
-                results.BonusCredits = mission.BonusCredits;
+                results.BonusCredits = (int)(mission.BonusCredits * creditMultiplier);
 
             results.ReputationGained = mission.ReputationReward;
         }
         else if (outcome == CombatResult.Defeat)
         {
-            results.CreditsEarned = mission.CreditReward / 4; // Partial payment
+            results.CreditsEarned = (int)(mission.CreditReward / 4 * creditMultiplier);
             results.ReputationGained = -1;
         }
         else
         {
-            results.CreditsEarned = mission.CreditReward / 2;
+            results.CreditsEarned = (int)(mission.CreditReward / 2 * creditMultiplier);
         }
 
         // Faction standing changes
@@ -456,9 +469,41 @@ public class MissionService
                 }
             }
 
-            // Salvage allowance: base 1 + 1 per 2 difficulty, capped by pool size
+            // Salvage allowance: base 1 + 1 per 2 difficulty, scaled by payout level
+            float salvageMultiplier = mission.PayoutLevel switch
+            {
+                0 => 0.0f,
+                1 => 0.5f,
+                2 => 1.0f,
+                3 => 1.5f,
+                4 => 2.0f,
+                _ => 1.0f
+            };
             int baseAllowance = outcome == CombatResult.Victory ? 1 + mission.Difficulty / 2 : 1;
-            results.SalvageAllowance = Math.Min(baseAllowance, results.SalvagePool.Count);
+            int scaledAllowance = (int)Math.Ceiling(baseAllowance * salvageMultiplier);
+            results.SalvageAllowance = Math.Min(scaledAllowance, results.SalvagePool.Count);
+
+            // Frame salvage from head-killed enemies (pilot dead but frame structurally intact)
+            foreach (var enemy in enemyFrames.Where(e => e.IsPilotDead && e.HasHeadDestroyed))
+            {
+                int basePrice = ManagementService.GetChassisPrice(new Chassis { Class = enemy.Class });
+                results.SalvageFrames.Add(new SalvageFrame
+                {
+                    ChassisId = enemy.ChassisId,
+                    ChassisDesignation = enemy.ChassisDesignation,
+                    ChassisName = enemy.ChassisName,
+                    ChassisClass = enemy.Class,
+                    SourceFrame = enemy.CustomName,
+                    ArmorHead = 0, // Head was destroyed
+                    ArmorCenterTorso = Math.Max(0, enemy.Armor.GetValueOrDefault(HitLocation.CenterTorso, 0)),
+                    ArmorLeftTorso = Math.Max(0, enemy.Armor.GetValueOrDefault(HitLocation.LeftTorso, 0)),
+                    ArmorRightTorso = Math.Max(0, enemy.Armor.GetValueOrDefault(HitLocation.RightTorso, 0)),
+                    ArmorLeftArm = Math.Max(0, enemy.Armor.GetValueOrDefault(HitLocation.LeftArm, 0)),
+                    ArmorRightArm = Math.Max(0, enemy.Armor.GetValueOrDefault(HitLocation.RightArm, 0)),
+                    ArmorLegs = Math.Max(0, enemy.Armor.GetValueOrDefault(HitLocation.Legs, 0)),
+                    SalvagePrice = (int)(basePrice * 0.40)
+                });
+            }
         }
 
         // Frame damage reports
@@ -527,6 +572,44 @@ public class MissionService
     }
 
     /// <summary>
+    /// Rolls scavenge and bonus loot after player has made their salvage picks
+    /// </summary>
+    public void ProcessScavengeAndBonus(MissionResults results, Mission mission)
+    {
+        // 1. Scavenge rolls for unpicked items
+        var pickedWeaponIds = results.SalvagedWeaponIds.ToHashSet();
+        foreach (var item in results.SalvagePool)
+        {
+            if (!pickedWeaponIds.Contains(item.WeaponId))
+            {
+                if (_random.Next(100) < mission.SalvageChance)
+                    results.ScavengedItems.Add(item);
+            }
+        }
+
+        // 2. Bonus drops: 15% per destroyed enemy
+        var opponentWeapons = _weaponRepo.GetByFaction(mission.OpponentFactionId)
+            .Where(w => w.SpecialEffect == null || !w.SpecialEffect.Contains("exclusive")).ToList();
+
+        var destroyedEnemies = results.SalvagePool.Select(s => s.SourceFrame).Distinct().ToList();
+        foreach (var enemyName in destroyedEnemies)
+        {
+            if (_random.Next(100) < 15 && opponentWeapons.Any())
+            {
+                var weapon = opponentWeapons[_random.Next(opponentWeapons.Count)];
+                results.BonusLootItems.Add(new SalvageItem
+                {
+                    WeaponId = weapon.WeaponId,
+                    WeaponName = weapon.Name,
+                    HardpointSize = weapon.HardpointSize,
+                    SalvageValue = weapon.SalvageValue,
+                    SourceFrame = enemyName
+                });
+            }
+        }
+    }
+
+    /// <summary>
     /// Applies mission results to persistent state
     /// </summary>
     public void ApplyResults(MissionResults results, ManagementService management)
@@ -548,6 +631,13 @@ public class MissionService
         {
             management.AddToInventory(weaponId);
         }
+
+        // Add scavenged and bonus loot to inventory
+        foreach (var item in results.ScavengedItems)
+            management.AddToInventory(item.WeaponId);
+        foreach (var item in results.BonusLootItems)
+            management.AddToInventory(item.WeaponId);
+
 
         // Apply faction standing changes
         foreach (var (factionId, delta) in results.FactionStandingChanges)
@@ -582,6 +672,12 @@ public class MissionService
             }
 
             pilotRepo.Update(pilot);
+        }
+
+        // Create frame instances from purchased salvage frames
+        foreach (var salvageFrame in results.PurchasedSalvageFrames)
+        {
+            management.PurchaseSalvageFrame(salvageFrame);
         }
     }
 }

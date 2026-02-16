@@ -10,7 +10,7 @@ public class DatabaseContext : IDisposable
 {
     private readonly string _connectionString;
     private SqliteConnection? _connection;
-    private const int SchemaVersion = 7; // Increment when schema changes
+    private const int SchemaVersion = 8; // Increment when schema changes
 
     public string DatabasePath { get; }
 
@@ -100,6 +100,7 @@ public class DatabaseContext : IDisposable
     {
         using var command = connection.CreateCommand();
         command.CommandText = @"
+            DROP TABLE IF EXISTS MarketStock;
             DROP TABLE IF EXISTS JumpRoute;
             DROP TABLE IF EXISTS Planet;
             DROP TABLE IF EXISTS StarSystem;
@@ -326,6 +327,17 @@ public class DatabaseContext : IDisposable
                 TravelDays INTEGER NOT NULL,
                 FOREIGN KEY (FromSystemId) REFERENCES StarSystem(SystemId),
                 FOREIGN KEY (ToSystemId) REFERENCES StarSystem(SystemId)
+            );
+
+            -- Market stock (persistent per-planet inventory, refreshes weekly)
+            CREATE TABLE IF NOT EXISTS MarketStock (
+                MarketStockId INTEGER PRIMARY KEY AUTOINCREMENT,
+                PlanetId INTEGER NOT NULL,
+                ItemType TEXT NOT NULL,
+                ItemId INTEGER NOT NULL,
+                Quantity INTEGER NOT NULL DEFAULT 1,
+                GeneratedOnDay INTEGER NOT NULL,
+                FOREIGN KEY (PlanetId) REFERENCES Planet(PlanetId)
             );
         ";
 

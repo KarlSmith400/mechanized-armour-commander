@@ -8,6 +8,116 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added - Salvage/Loot Overhaul with Payout Slider (v0.10.3)
+
+- **Pre-Mission Payout Slider** — 5-position slider on Deploy screen trades credits for salvage picks
+  - Full Pay (100% credits, 0 picks) → Mostly Pay → Balanced (70%, normal) → Mostly Salvage → Full Salvage (25%, 2× picks)
+  - Default: Balanced — preserves previous behavior
+  - Preview shows estimated credits and salvage picks before deployment
+- **Scavenge Rolls** — Unpicked salvage pool items get an automatic recovery roll (SalvageChance%)
+- **Bonus Finds** — 15% chance per destroyed enemy to yield a bonus weapon from opponent faction
+- **Two-Phase Post-Combat** — Player makes picks, then sees scavenge/bonus results before confirming
+- **CORE_RULES.md** — Added Sections 12.2 (Payout Slider), 12.3 (Scavenge Rolls), renumbered Frame Salvage to 12.4
+
+### Changed
+
+- **Mission.cs** — Added `PayoutLevel` field (0-4, default 2)
+- **MissionResults.cs** — Added `ScavengedItems`, `BonusLootItems`, `PayoutLevel` fields
+- **MissionService.cs** — Credit/salvage scaling by payout level, `ProcessScavengeAndBonus()` method
+- **ManagementWindow.xaml.cs** — Payout slider UI in Deploy section with live preview
+- **PostCombatWindow.xaml.cs** — Two-phase continue flow with scavenge results display
+
+---
+
+### Added - In-Game Calendar & Rules Polish (v0.10.2)
+
+- **In-Game Calendar System**
+  - Day counter now displays as a proper date: Day 1 = 1 January 2847 (matching lore setting)
+  - Military date format: "15 Jan 2847" in status bar and save slot screen
+  - Standard Earth calendar (365 days, 12 months) — years roll over naturally
+  - `GetCalendarDate()` helper in ManagementService converts day integer to formatted date
+- **Pilot Generation Expanded** — Tabletop roll methods using d6 (1-2/3-4/5-6 mapping), callsign pool, starting pilot stat blocks
+- **Starting Conditions Expanded** — Specific starting frames (Enforcer + Raider), pilot cross-references
+
+### Changed
+
+- **ManagementService.cs** — Added `GetCalendarDate(int currentDay)` helper
+- **ManagementWindow.xaml.cs** — Status bar shows calendar date instead of "Day X"
+- **SaveSlotWindow.xaml.cs** — Save slot info shows calendar date instead of "Day X"
+- **CORE_RULES.md** — Added Section 13.2 Calendar, expanded pilot hiring (Section 9.3) and starting pilots (Section 9.5)
+
+---
+
+### Added - Tabletop-Ready Core Rules Expansion (v0.10.1)
+
+- **Complete Weapon Reference** — All 16 weapons with full stat blocks (damage, energy, ammo, space, range, accuracy, price, faction)
+- **Chassis Stat Blocks** — All 12 chassis with complete stats (armor, reactor, speed, evasion, hardpoints, structure per location)
+- **Structure Per Location Table** — Head/CT/Side Torso/Arm/Legs structure values for every chassis
+- **Faction Standing System** — Full standing scale (-100 to 500), five tiers (Hostile through Trusted), standing change formulas per mission outcome
+- **Mission Generation Rules** — Enemy force composition by difficulty, pilot skill scaling, difficulty determination formula
+- **Economy Expansion** — Daily maintenance costs, deployment costs, mission reward tables with standing multipliers, price modifiers
+- **Salvage Allowance** — Pick count by outcome, salvage chance formula
+- **Pilot XP System** — XP gain formula (difficulty × 25 + victory bonus)
+- **Tabletop Quick Reference** — Dice requirements, turn sequence summary, attack resolution steps, economy cheat sheet
+- **Three Factions Detail** — Territory, identity, and exclusive gear listings for Crucible, Directorate, Outer Reach
+
+### Added - Persistent Market Stock & Frame Salvage (v0.10.0)
+
+- **Persistent Market Stock System**
+  - Market inventory is now generated per-planet and persists for 7 game days before refreshing
+  - Roll-based availability weighted by faction standing with the system's controlling faction
+  - Small weapons always available (qty 2–4), Medium weapons ~70% chance (qty 1–2), Large weapons ~30% chance (qty 1)
+  - Light chassis always available (min 1 guaranteed), Medium ~45%, Heavy ~20%, Assault ~8%
+  - Passive equipment ~80%, Active ~50%, Slot ~40%
+  - Standing bonus: factionStanding / 50 added to roll (0–10 bonus)
+  - Contested systems: no standing bonus, only universal items
+  - Exclusive weapons remain behind Allied standing gate (excluded from stock rolls)
+  - Stock quantities decrement on purchase; out-of-stock items unavailable until weekly refresh
+  - Stock refresh countdown shown in market UI
+
+- **Frame Salvage from Head Kills**
+  - Enemy frames destroyed via head kill (pilot dead, frame structurally intact) can be purchased post-combat
+  - Salvage price: 40% of chassis base price
+  - Frame arrives with actual combat-damaged armor values (head = 0, other locations reflect battle damage)
+  - Status: "Damaged" with 30% of salvage price as repair cost, 3 days repair time
+  - Purchased with credits (separate from weapon salvage allowance)
+  - Appears in new "FRAME SALVAGE" section on post-combat results screen
+
+### Changed
+
+- **DatabaseContext.cs** — Schema v7 → v8, added MarketStock table
+- **ManagementService.cs** — Market stock generation/resolution, PurchaseSalvageFrame, purchase methods accept marketStockId
+- **ManagementWindow.xaml.cs** — Market UI rewritten to use stock-based data with quantities and refresh timer
+- **MissionService.cs** — ChassisId set on enemy frames, frame salvage pool in ProcessResults, frame creation in ApplyResults
+- **PostCombatWindow.xaml.cs** — Frame salvage purchase UI with PURCHASE buttons
+- **CombatFrame.cs** — Added ChassisId property
+- **MissionResults.cs** — Added SalvageFrame class and salvage frame lists
+- **CORE_RULES.md** — Added Section 11.4 (Market Stock System) and Section 12.1 (Frame Salvage)
+
+### New Files
+- Data/Models/MarketStock.cs — Market stock entry model
+- Data/Repositories/MarketStockRepository.cs — Market stock CRUD with batch insert and quantity decrement
+
+---
+
+### Added - Weapon Group Management (v0.9.2)
+
+- **Weapon Group UI in Refit Bay**
+  - Color-coded group badges (G1=green, G2=yellow, G3=orange, G4=red) on each equipped weapon
+  - ◄/► buttons to cycle weapon group assignment (1–4, wrapping)
+  - Damage, energy cost, and range class (Sht/Med/Lng) shown per weapon
+  - Reactor budget panel showing effective reactor output, movement energy cost, available energy per turn
+  - Per-group energy and damage summaries with over-budget warnings (text turns orange)
+  - Group reassignment is free (no credit or time cost) — it's a software change, not physical work
+
+### Changed
+
+- **RefitWindow.xaml** — Added ReactorBudgetText element in header area
+- **RefitWindow.xaml.cs** — Weapon group cycling UI, MakeSmallButton helper, GroupDown/GroupUp handlers, UpdateReactorBudget method, EffectValue property on StagedEquipment/StagedEquipmentInv, HasGroupChanges for confirm button enabling
+- **CORE_RULES.md** — Updated equipment stats to match code (all 12 items), updated weapon group and refit cost sections
+
+---
+
 ### Added - Audio System & Station Terrain Art (v0.9.1)
 
 - **Audio System**
@@ -919,6 +1029,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - ✅ Audio system with 9 sound effects (UI clicks, combat, outcomes)
 - ✅ Station terrain tile art (metal floor panels, cargo crates, hazard grating)
 - ✅ Landscape-aware terrain rendering (Station/Industrial use metal tiles)
+- ✅ Weapon group management UI in Refit Bay with reactor budget display
+- ✅ Persistent market stock system with roll-based availability and faction standing weight
+- ✅ Frame salvage from head kills with combat damage applied
+- ✅ Database schema v8 with MarketStock table
 - ⏳ Balance testing
 - Active equipment actions (Thrust Pack, ECM, Barrier, Targeting Uplink)
 - Pilot skill leveling on XP thresholds
@@ -929,12 +1043,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Development Statistics
 
-- **Source Files**: ~71 (.cs files)
+- **Source Files**: ~73 (.cs files)
 - **XAML Files**: 8
 - **Sound Effects**: 9 (.wav files)
 - **Terrain Tiles**: 8 (.png hex tiles — 5 nature + 3 station)
 - **Projects**: 3
-- **Database Tables**: 15 + SchemaVersion (Chassis, Weapon, Equipment, FrameInstance, Loadout, EquipmentLoadout, Pilot, PlayerState, Inventory, EquipmentInventory, Faction, FactionStanding, StarSystem, Planet, JumpRoute)
+- **Database Tables**: 16 + SchemaVersion (Chassis, Weapon, Equipment, FrameInstance, Loadout, EquipmentLoadout, Pilot, PlayerState, Inventory, EquipmentInventory, Faction, FactionStanding, StarSystem, Planet, JumpRoute, MarketStock)
 - **Seeded Records**: 101 (12 chassis + 16 weapons + 12 equipment + 4 pilots + 2 frames + 3 factions + 11 systems + 25 planets + 16 routes)
 
 ---

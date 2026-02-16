@@ -24,6 +24,7 @@ public class ManagementService
     private readonly EquipmentRepository _equipmentRepo;
     private readonly EquipmentLoadoutRepository _equipmentLoadoutRepo;
     private readonly EquipmentInventoryRepository _equipmentInventoryRepo;
+    private readonly MarketStockRepository _marketStockRepo;
 
     public ManagementService(DatabaseContext dbContext)
     {
@@ -40,6 +41,7 @@ public class ManagementService
         _equipmentRepo = new EquipmentRepository(dbContext);
         _equipmentLoadoutRepo = new EquipmentLoadoutRepository(dbContext);
         _equipmentInventoryRepo = new EquipmentInventoryRepository(dbContext);
+        _marketStockRepo = new MarketStockRepository(dbContext);
     }
 
     // === Roster ===
@@ -67,6 +69,13 @@ public class ManagementService
     public PlayerState? GetPlayerState()
     {
         return _stateRepo.Get();
+    }
+
+    public string GetCalendarDate(int currentDay)
+    {
+        var baseDate = new DateTime(2847, 1, 1);
+        var gameDate = baseDate.AddDays(currentDay - 1);
+        return gameDate.ToString("dd MMM yyyy");
     }
 
     public void SavePlayerState(PlayerState state)
@@ -197,7 +206,7 @@ public class ManagementService
 
     // === Market ===
 
-    public bool PurchaseChassis(int chassisId, string customName, float priceModifier = 1.0f)
+    public bool PurchaseChassis(int chassisId, string customName, float priceModifier = 1.0f, int? marketStockId = null)
     {
         var chassis = _chassisRepo.GetById(chassisId);
         var state = _stateRepo.Get();
@@ -226,6 +235,10 @@ public class ManagementService
 
         _frameRepo.Insert(newFrame);
         _stateRepo.Update(state);
+
+        if (marketStockId.HasValue)
+            _marketStockRepo.DecrementQuantity(marketStockId.Value);
+
         return true;
     }
 
@@ -297,7 +310,7 @@ public class ManagementService
     /// <summary>
     /// Purchase a weapon from the market and add to company inventory
     /// </summary>
-    public bool PurchaseWeapon(int weaponId, float priceModifier = 1.0f)
+    public bool PurchaseWeapon(int weaponId, float priceModifier = 1.0f, int? marketStockId = null)
     {
         var weapon = _weaponRepo.GetById(weaponId);
         var state = _stateRepo.Get();
@@ -309,6 +322,10 @@ public class ManagementService
         state.Credits -= price;
         _inventoryRepo.Insert(weaponId);
         _stateRepo.Update(state);
+
+        if (marketStockId.HasValue)
+            _marketStockRepo.DecrementQuantity(marketStockId.Value);
+
         return true;
     }
 
@@ -395,7 +412,7 @@ public class ManagementService
         return _equipmentInventoryRepo.GetAll();
     }
 
-    public bool PurchaseEquipment(int equipmentId, float priceModifier = 1.0f)
+    public bool PurchaseEquipment(int equipmentId, float priceModifier = 1.0f, int? marketStockId = null)
     {
         var equipment = _equipmentRepo.GetById(equipmentId);
         var state = _stateRepo.Get();
@@ -407,6 +424,10 @@ public class ManagementService
         state.Credits -= price;
         _equipmentInventoryRepo.Insert(equipmentId);
         _stateRepo.Update(state);
+
+        if (marketStockId.HasValue)
+            _marketStockRepo.DecrementQuantity(marketStockId.Value);
+
         return true;
     }
 
@@ -441,6 +462,236 @@ public class ManagementService
         if (frame == null || frame.Status != "Ready") return false;
 
         _equipmentLoadoutRepo.ReplaceEquipmentLoadout(instanceId, newEquipmentLoadout);
+        return true;
+    }
+
+    // === Market Stock ===
+
+    public MarketStockResult GetOrGenerateMarketStock(int planetId, int? controllingFactionId)
+    {
+        var state = _stateRepo.Get();
+        if (state == null) return new MarketStockResult();
+
+        int currentDay = state.CurrentDay;
+        int generatedDay = _marketStockRepo.GetGenerationDay(planetId);
+
+        if (generatedDay == 0 || currentDay - generatedDay >= 7)
+        {
+            RegenerateMarketStock(planetId, controllingFactionId, currentDay);
+        }
+
+        var stockRows = _marketStockRepo.GetByPlanet(planetId);
+        return ResolveMarketStock(stockRows);
+    }
+
+    private void RegenerateMarketStock(int planetId, int? controllingFactionId, int currentDay)
+    {
+        _marketStockRepo.DeleteByPlanet(planetId);
+        var random = new Random();
+        var newStock = new List<MarketStock>();
+
+        // Standing bonus: 0-10 from faction standing (0 for contested systems)
+        int standingBonus = 0;
+        if (controllingFactionId.HasValue)
+        {
+            var standing = _standingRepo.GetByFaction(controllingFactionId.Value);
+            if (standing != null)
+                standingBonus = standing.Standing / 50;
+        }
+
+        // --- WEAPONS ---
+        var allWeapons = controllingFactionId.HasValue
+            ? _weaponRepo.GetByFaction(controllingFactionId.Value)
+            : _weaponRepo.GetAll().Where(w => w.FactionId == null).ToList();
+
+        foreach (var weapon in allWeapons)
+        {
+            // Exclusive weapons stay behind the existing Allied gate, not in stock
+            if (weapon.SpecialEffect != null && weapon.SpecialEffect.Contains("exclusive"))
+                continue;
+
+            int roll = random.Next(1, 101) + standingBonus;
+            bool inStock = weapon.HardpointSize switch
+            {
+                "Small" => true,
+                "Medium" => roll >= 30,
+                "Large" => roll >= 70,
+                _ => roll >= 50
+            };
+
+            if (inStock)
+            {
+                int qty = weapon.HardpointSize switch
+                {
+                    "Small" => random.Next(2, 5),
+                    "Medium" => random.Next(1, 3),
+                    "Large" => 1,
+                    _ => 1
+                };
+
+                newStock.Add(new MarketStock
+                {
+                    PlanetId = planetId,
+                    ItemType = "Weapon",
+                    ItemId = weapon.WeaponId,
+                    Quantity = qty,
+                    GeneratedOnDay = currentDay
+                });
+            }
+        }
+
+        // --- CHASSIS ---
+        var allChassis = controllingFactionId.HasValue
+            ? _chassisRepo.GetByFaction(controllingFactionId.Value)
+            : _chassisRepo.GetAll().Where(c => c.FactionId == null).ToList();
+
+        bool hasAnyChassis = false;
+        foreach (var chassis in allChassis)
+        {
+            int roll = random.Next(1, 101) + standingBonus;
+            bool inStock = chassis.Class switch
+            {
+                "Light" => true,
+                "Medium" => roll >= 55,
+                "Heavy" => roll >= 80,
+                "Assault" => roll >= 92,
+                _ => roll >= 50
+            };
+
+            if (inStock)
+            {
+                int qty = chassis.Class == "Light" ? random.Next(1, 3) : 1;
+                newStock.Add(new MarketStock
+                {
+                    PlanetId = planetId,
+                    ItemType = "Chassis",
+                    ItemId = chassis.ChassisId,
+                    Quantity = qty,
+                    GeneratedOnDay = currentDay
+                });
+                hasAnyChassis = true;
+            }
+        }
+
+        // Guarantee at least 1 Light chassis
+        if (!hasAnyChassis)
+        {
+            var lightChassis = allChassis.Where(c => c.Class == "Light").ToList();
+            if (lightChassis.Count > 0)
+            {
+                var pick = lightChassis[random.Next(lightChassis.Count)];
+                newStock.Add(new MarketStock
+                {
+                    PlanetId = planetId,
+                    ItemType = "Chassis",
+                    ItemId = pick.ChassisId,
+                    Quantity = 1,
+                    GeneratedOnDay = currentDay
+                });
+            }
+        }
+
+        // --- EQUIPMENT ---
+        var allEquipment = _equipmentRepo.GetAll();
+
+        foreach (var eq in allEquipment)
+        {
+            int roll = random.Next(1, 101) + standingBonus;
+            bool inStock = eq.Category switch
+            {
+                "Passive" => roll >= 20,
+                "Active" => roll >= 50,
+                "Slot" => roll >= 60,
+                _ => roll >= 50
+            };
+
+            if (inStock)
+            {
+                int qty = eq.Category switch
+                {
+                    "Passive" => random.Next(1, 4),
+                    "Active" => random.Next(1, 3),
+                    "Slot" => 1,
+                    _ => 1
+                };
+
+                newStock.Add(new MarketStock
+                {
+                    PlanetId = planetId,
+                    ItemType = "Equipment",
+                    ItemId = eq.EquipmentId,
+                    Quantity = qty,
+                    GeneratedOnDay = currentDay
+                });
+            }
+        }
+
+        _marketStockRepo.InsertBatch(newStock);
+    }
+
+    private MarketStockResult ResolveMarketStock(List<MarketStock> stockRows)
+    {
+        var result = new MarketStockResult();
+
+        foreach (var row in stockRows)
+        {
+            switch (row.ItemType)
+            {
+                case "Chassis":
+                    var chassis = _chassisRepo.GetById(row.ItemId);
+                    if (chassis != null)
+                        result.Chassis.Add((chassis, row.Quantity, row.MarketStockId));
+                    break;
+                case "Weapon":
+                    var weapon = _weaponRepo.GetById(row.ItemId);
+                    if (weapon != null)
+                        result.Weapons.Add((weapon, row.Quantity, row.MarketStockId));
+                    break;
+                case "Equipment":
+                    var eq = _equipmentRepo.GetById(row.ItemId);
+                    if (eq != null)
+                        result.Equipment.Add((eq, row.Quantity, row.MarketStockId));
+                    break;
+            }
+        }
+
+        if (stockRows.Count > 0)
+        {
+            result.GeneratedOnDay = stockRows.Min(s => s.GeneratedOnDay);
+            result.ExpiresOnDay = result.GeneratedOnDay + 7;
+        }
+
+        return result;
+    }
+
+    // === Frame Salvage ===
+
+    public bool PurchaseSalvageFrame(SalvageFrame salvage)
+    {
+        var state = _stateRepo.Get();
+        if (state == null || state.Credits < salvage.SalvagePrice) return false;
+
+        state.Credits -= salvage.SalvagePrice;
+
+        var newFrame = new FrameInstance
+        {
+            ChassisId = salvage.ChassisId,
+            CustomName = $"Salvage-{salvage.ChassisDesignation}",
+            ArmorHead = salvage.ArmorHead,
+            ArmorCenterTorso = salvage.ArmorCenterTorso,
+            ArmorLeftTorso = salvage.ArmorLeftTorso,
+            ArmorRightTorso = salvage.ArmorRightTorso,
+            ArmorLeftArm = salvage.ArmorLeftArm,
+            ArmorRightArm = salvage.ArmorRightArm,
+            ArmorLegs = salvage.ArmorLegs,
+            Status = "Damaged",
+            RepairCost = (int)(salvage.SalvagePrice * 0.3),
+            RepairTime = 3,
+            AcquisitionDate = DateTime.Now
+        };
+
+        _frameRepo.Insert(newFrame);
+        _stateRepo.Update(state);
         return true;
     }
 
@@ -591,6 +842,7 @@ public class ManagementService
         var combatFrame = new CombatFrame
         {
             InstanceId = frame.InstanceId,
+            ChassisId = chassis.ChassisId,
             CustomName = frame.CustomName,
             ChassisDesignation = chassis.Designation,
             ChassisName = chassis.Name,
@@ -879,4 +1131,13 @@ public class DayReport
     public int Day { get; set; }
     public int MaintenanceCost { get; set; }
     public List<string> Events { get; set; } = new();
+}
+
+public class MarketStockResult
+{
+    public List<(Chassis Chassis, int Quantity, int MarketStockId)> Chassis { get; set; } = new();
+    public List<(Weapon Weapon, int Quantity, int MarketStockId)> Weapons { get; set; } = new();
+    public List<(Equipment Equipment, int Quantity, int MarketStockId)> Equipment { get; set; } = new();
+    public int GeneratedOnDay { get; set; }
+    public int ExpiresOnDay { get; set; }
 }

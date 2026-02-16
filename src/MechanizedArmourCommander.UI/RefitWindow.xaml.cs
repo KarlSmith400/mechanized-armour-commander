@@ -113,6 +113,7 @@ public partial class RefitWindow : Window
         public int SpaceCost { get; set; }
         public int EnergyCost { get; set; }
         public string Effect { get; set; } = "";
+        public int EffectValue { get; set; }
         public string? Description { get; set; }
         public string? HardpointSlot { get; set; }   // null for Passive/Active
         public int SlotDefIndex { get; set; } = -1;   // -1 for Passive/Active
@@ -128,6 +129,7 @@ public partial class RefitWindow : Window
         public int SpaceCost { get; set; }
         public int EnergyCost { get; set; }
         public string Effect { get; set; } = "";
+        public int EffectValue { get; set; }
         public string? Description { get; set; }
     }
 
@@ -281,6 +283,7 @@ public partial class RefitWindow : Window
                 SpaceCost = eq.Equipment.SpaceCost,
                 EnergyCost = eq.Equipment.EnergyCost,
                 Effect = eq.Equipment.Effect,
+                EffectValue = eq.Equipment.EffectValue,
                 Description = eq.Equipment.Description,
                 HardpointSlot = slotName,
                 SlotDefIndex = slotIdx
@@ -301,6 +304,7 @@ public partial class RefitWindow : Window
                 SpaceCost = ei.Equipment.SpaceCost,
                 EnergyCost = ei.Equipment.EnergyCost,
                 Effect = ei.Equipment.Effect,
+                EffectValue = ei.Equipment.EffectValue,
                 Description = ei.Equipment.Description
             });
         }
@@ -314,6 +318,7 @@ public partial class RefitWindow : Window
         DrawMechDiagram();
         UpdateInventoryPanel();
         UpdateCostDisplay();
+        UpdateReactorBudget();
     }
 
     private void UpdateHardpointSummary()
@@ -616,12 +621,22 @@ public partial class RefitWindow : Window
         }
         else
         {
-            foreach (var weapon in _stagedEquipped)
+            for (int wi = 0; wi < _stagedEquipped.Count; wi++)
             {
+                var weapon = _stagedEquipped[wi];
                 string locAbbrev = weapon.MountLocation switch
                 {
                     "CenterTorso" => "CT", "LeftTorso" => "LT", "RightTorso" => "RT",
                     "LeftArm" => "LA", "RightArm" => "RA", _ => weapon.MountLocation[..Math.Min(4, weapon.MountLocation.Length)]
+                };
+
+                // Group badge color: G1=green, G2=yellow, G3=orange, G4=red
+                var groupColor = weapon.WeaponGroup switch
+                {
+                    1 => Color.FromRgb(0, 200, 0),
+                    2 => Color.FromRgb(220, 200, 0),
+                    3 => Color.FromRgb(255, 140, 0),
+                    _ => Color.FromRgb(220, 60, 60)
                 };
 
                 var panel = new Border
@@ -635,9 +650,35 @@ public partial class RefitWindow : Window
 
                 var stack = new StackPanel { Orientation = Orientation.Horizontal };
 
+                // Group badge
                 stack.Children.Add(new TextBlock
                 {
-                    Text = $"[{weapon.HardpointSize[0]}] {weapon.WeaponName} @ {locAbbrev}  {weapon.Damage}D {weapon.EnergyCost}E",
+                    Text = $"G{weapon.WeaponGroup}",
+                    FontSize = 9, FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(groupColor),
+                    FontFamily = new FontFamily("Consolas"),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 4, 0),
+                    MinWidth = 20
+                });
+
+                // Group cycle buttons
+                var groupDownBtn = MakeSmallButton("\u25C4", wi);
+                groupDownBtn.Click += GroupDown_Click;
+                stack.Children.Add(groupDownBtn);
+
+                var groupUpBtn = MakeSmallButton("\u25BA", wi);
+                groupUpBtn.Click += GroupUp_Click;
+                stack.Children.Add(groupUpBtn);
+
+                // Weapon info: [Size] Name @ Location  DmgD  EnergyE  Range
+                string rangeAbbrev = weapon.RangeClass switch
+                {
+                    "Short" => "Sht", "Medium" => "Med", "Long" => "Lng", _ => weapon.RangeClass
+                };
+                stack.Children.Add(new TextBlock
+                {
+                    Text = $" [{weapon.HardpointSize[0]}] {weapon.WeaponName} @ {locAbbrev}  {weapon.Damage}D {weapon.EnergyCost}E {rangeAbbrev}",
                     FontSize = 9,
                     Foreground = new SolidColorBrush(Color.FromRgb(255, 200, 0)),
                     FontFamily = new FontFamily("Consolas"),
@@ -648,7 +689,7 @@ public partial class RefitWindow : Window
                 var removeBtn = new Button
                 {
                     Content = "REMOVE",
-                    Tag = _stagedEquipped.IndexOf(weapon),
+                    Tag = wi,
                     Height = 22,
                     Padding = new Thickness(6, 0, 6, 0),
                     FontFamily = new FontFamily("Consolas"),
@@ -1061,6 +1102,92 @@ public partial class RefitWindow : Window
         }
     }
 
+    private Button MakeSmallButton(string text, int tagIndex)
+    {
+        return new Button
+        {
+            Content = text,
+            Tag = tagIndex,
+            Style = null,
+            Height = 20, Width = 20,
+            Padding = new Thickness(0),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 8, FontWeight = FontWeights.Bold,
+            Background = new SolidColorBrush(Color.FromRgb(25, 30, 40)),
+            Foreground = new SolidColorBrush(Color.FromRgb(0, 180, 255)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0, 60, 100)),
+            BorderThickness = new Thickness(1),
+            Margin = new Thickness(1, 0, 1, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+    }
+
+    private void GroupDown_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not int index) return;
+        if (index < 0 || index >= _stagedEquipped.Count) return;
+        var weapon = _stagedEquipped[index];
+        weapon.WeaponGroup = weapon.WeaponGroup <= 1 ? 4 : weapon.WeaponGroup - 1;
+        RefreshAll();
+    }
+
+    private void GroupUp_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not int index) return;
+        if (index < 0 || index >= _stagedEquipped.Count) return;
+        var weapon = _stagedEquipped[index];
+        weapon.WeaponGroup = weapon.WeaponGroup >= 4 ? 1 : weapon.WeaponGroup + 1;
+        RefreshAll();
+    }
+
+    private void UpdateReactorBudget()
+    {
+        int reactor = _chassis.ReactorOutput;
+        int moveCost = _chassis.MovementEnergyCost;
+
+        // Check if Cooling Vents equipped (ReactorBoost)
+        int reactorBoost = _stagedEquipment
+            .Where(eq => eq.Effect == "ReactorBoost")
+            .Sum(eq => eq.EffectValue);
+        int effectiveReactor = reactor + reactorBoost;
+        int availableAfterMove = effectiveReactor - moveCost;
+
+        var parts = new List<string>();
+        parts.Add($"Reactor: {effectiveReactor}E/turn");
+        if (reactorBoost > 0) parts[0] += $" (base {reactor} +{reactorBoost} vents)";
+        parts.Add($"Move: {moveCost}E");
+        parts.Add($"After move: {availableAfterMove}E");
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine(string.Join(" | ", parts));
+
+        // Per-group summary
+        var groups = _stagedEquipped
+            .GroupBy(w => w.WeaponGroup)
+            .OrderBy(g => g.Key);
+
+        var groupParts = new List<string>();
+        foreach (var g in groups)
+        {
+            int totalE = g.Sum(w => w.EnergyCost);
+            int totalD = g.Sum(w => w.Damage);
+            string names = string.Join("+", g.Select(w => w.WeaponName));
+            string warning = totalE > availableAfterMove ? " (!)" : "";
+            groupParts.Add($"G{g.Key}: {totalE}E {totalD}D{warning} [{names}]");
+        }
+        if (groupParts.Any())
+            sb.Append(string.Join("  |  ", groupParts));
+
+        ReactorBudgetText.Text = sb.ToString();
+
+        // Color: warn if any group exceeds budget
+        bool anyOverBudget = _stagedEquipped
+            .GroupBy(w => w.WeaponGroup)
+            .Any(g => g.Sum(w => w.EnergyCost) > availableAfterMove);
+        ReactorBudgetText.Foreground = new SolidColorBrush(
+            anyOverBudget ? Color.FromRgb(255, 140, 0) : Color.FromRgb(0, 200, 255));
+    }
+
     #endregion
 
     #region Equipment Equip / Remove Logic
@@ -1098,6 +1225,7 @@ public partial class RefitWindow : Window
                 SpaceCost = eq.SpaceCost,
                 EnergyCost = eq.EnergyCost,
                 Effect = eq.Effect,
+                EffectValue = eq.EffectValue,
                 Description = eq.Description,
                 HardpointSlot = null,
                 SlotDefIndex = -1
@@ -1140,6 +1268,7 @@ public partial class RefitWindow : Window
             SpaceCost = eq.SpaceCost,
             EnergyCost = eq.EnergyCost,
             Effect = eq.Effect,
+            EffectValue = eq.EffectValue,
             Description = eq.Description,
             HardpointSlot = slot.SlotName,
             SlotDefIndex = slot.Index
@@ -1164,6 +1293,7 @@ public partial class RefitWindow : Window
                 SpaceCost = eq.SpaceCost,
                 EnergyCost = eq.EnergyCost,
                 Effect = eq.Effect,
+                EffectValue = eq.EffectValue,
                 Description = eq.Description
             });
 
@@ -1251,15 +1381,29 @@ public partial class RefitWindow : Window
         return changes;
     }
 
+    private bool HasGroupChanges()
+    {
+        foreach (var orig in _originalLoadout)
+        {
+            if (orig.Weapon == null) continue;
+            var staged = _stagedEquipped.FirstOrDefault(w => w.WeaponId == orig.WeaponId);
+            if (staged != null && staged.WeaponGroup != orig.WeaponGroup)
+                return true;
+        }
+        return false;
+    }
+
     private void UpdateCostDisplay()
     {
         int changes = CountChanges();
+        bool groupChanges = HasGroupChanges();
         int cost = changes * CostPerChange;
         int time = changes * DaysPerChange;
 
         CostDisplayText.Text = $"Changes: {changes} | Cost: {cost:N0} Credits | Time: {time} day{(time != 1 ? "s" : "")}";
-        ConfirmButton.IsEnabled = changes > 0;
-        ConfirmButton.Opacity = changes > 0 ? 1.0 : 0.5;
+        bool hasChanges = changes > 0 || groupChanges;
+        ConfirmButton.IsEnabled = hasChanges;
+        ConfirmButton.Opacity = hasChanges ? 1.0 : 0.5;
     }
 
     #endregion

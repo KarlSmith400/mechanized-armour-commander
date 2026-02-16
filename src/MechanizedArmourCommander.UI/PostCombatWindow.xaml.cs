@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using MechanizedArmourCommander.Core.Models;
+using MechanizedArmourCommander.Core.Services;
 using MechanizedArmourCommander.Data;
 using MechanizedArmourCommander.Data.Repositories;
 
@@ -10,7 +11,10 @@ namespace MechanizedArmourCommander.UI;
 public partial class PostCombatWindow : Window
 {
     private readonly MissionResults _results;
+    private readonly Mission? _mission;
+    private readonly MissionService? _missionService;
     private readonly HashSet<int> _selectedSalvageIndices = new();
+    private bool _scavengePhaseComplete;
 
     public PostCombatWindow(MissionResults results, Mission? mission, DatabaseContext dbContext)
     {
@@ -18,6 +22,8 @@ public partial class PostCombatWindow : Window
         AddHandler(System.Windows.Controls.Primitives.ButtonBase.ClickEvent,
             new RoutedEventHandler((_, _) => AudioService.PlayClick()));
         _results = results;
+        _mission = mission;
+        _missionService = new MissionService(dbContext);
         DisplayResults(results, mission, dbContext);
     }
 
@@ -196,6 +202,69 @@ public partial class PostCombatWindow : Window
             AddLine("=== SALVAGE ===", "#006600", 11, true);
             AddLine("No enemy wreckage to salvage.", "#555555");
         }
+
+        // Frame salvage from head kills
+        if (results.SalvageFrames.Any())
+        {
+            AddLine("", "#000000");
+            AddLine("=== FRAME SALVAGE ===", "#FFAA00", 11, true);
+            AddLine("Enemy frames recovered from head kills — purchase with credits:", "#CC8800");
+            AddLine("", "#000000");
+
+            for (int i = 0; i < results.SalvageFrames.Count; i++)
+            {
+                var frame = results.SalvageFrames[i];
+                int capturedIndex = i;
+
+                var framePanel = new Border
+                {
+                    BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#332200")),
+                    BorderThickness = new Thickness(1),
+                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0A0A00")),
+                    Padding = new Thickness(6),
+                    Margin = new Thickness(0, 0, 0, 3)
+                };
+
+                var fContent = new StackPanel();
+                fContent.Children.Add(new TextBlock
+                {
+                    Text = $"{frame.ChassisDesignation} {frame.ChassisName} ({frame.ChassisClass}) — from {frame.SourceFrame}",
+                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFCC00")),
+                    FontSize = 11,
+                    FontWeight = FontWeights.Bold,
+                    FontFamily = new FontFamily("Consolas")
+                });
+                fContent.Children.Add(new TextBlock
+                {
+                    Text = $"Armor: H:{frame.ArmorHead} CT:{frame.ArmorCenterTorso} " +
+                           $"LT:{frame.ArmorLeftTorso} RT:{frame.ArmorRightTorso} " +
+                           $"LA:{frame.ArmorLeftArm} RA:{frame.ArmorRightArm} L:{frame.ArmorLegs}",
+                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#AA8800")),
+                    FontSize = 10,
+                    FontFamily = new FontFamily("Consolas")
+                });
+
+                var buyBtn = new Button
+                {
+                    Content = $"PURCHASE ${frame.SalvagePrice:N0}",
+                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#332200")),
+                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFCC00")),
+                    BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#664400")),
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize = 10,
+                    Padding = new Thickness(8, 3, 8, 3),
+                    Margin = new Thickness(0, 3, 0, 0),
+                    Width = 200,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Tag = capturedIndex
+                };
+                buyBtn.Click += SalvageFramePurchase_Click;
+                fContent.Children.Add(buyBtn);
+
+                framePanel.Child = fContent;
+                ReportPanel.Children.Add(framePanel);
+            }
+        }
     }
 
     private void SalvagePick_Click(object sender, RoutedEventArgs e)
@@ -230,6 +299,21 @@ public partial class PostCombatWindow : Window
         UpdateSalvageCounter();
     }
 
+    private void SalvageFramePurchase_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not int index) return;
+
+        var frame = _results.SalvageFrames[index];
+        if (!_results.PurchasedSalvageFrames.Contains(frame))
+        {
+            _results.PurchasedSalvageFrames.Add(frame);
+            btn.Content = "PURCHASED";
+            btn.IsEnabled = false;
+            btn.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#222200"));
+            btn.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#887700"));
+        }
+    }
+
     private void UpdateSalvageCounter()
     {
         ContinueButton.Content = _selectedSalvageIndices.Count > 0
@@ -253,7 +337,56 @@ public partial class PostCombatWindow : Window
 
     private void Continue_Click(object sender, RoutedEventArgs e)
     {
+        // Two-phase: first click runs scavenge rolls, second click closes
+        if (!_scavengePhaseComplete && _mission != null && _missionService != null
+            && _results.SalvagePool.Any())
+        {
+            _scavengePhaseComplete = true;
+            _missionService.ProcessScavengeAndBonus(_results, _mission);
+            DisplayScavengeResults();
+            return;
+        }
+
         DialogResult = true;
         Close();
+    }
+
+    private void DisplayScavengeResults()
+    {
+        var scavenged = _results.ScavengedItems;
+        var bonus = _results.BonusLootItems;
+
+        if (!scavenged.Any() && !bonus.Any())
+        {
+            AddLine("", "#000000");
+            AddLine("=== SCAVENGE RESULTS ===", "#FFAA00", 11, true);
+            AddLine("Your salvage crew found nothing additional in the wreckage.", "#555555");
+        }
+        else
+        {
+            AddLine("", "#000000");
+            AddLine("=== SCAVENGE RESULTS ===", "#FFAA00", 11, true);
+            AddLine("Your salvage crew recovered additional items from the wreckage:", "#CC8800");
+            AddLine("", "#000000");
+
+            foreach (var item in scavenged)
+            {
+                AddLine($"[Scavenged] {item.WeaponName} ({item.HardpointSize}) — ${item.SalvageValue:N0} — from {item.SourceFrame}",
+                    "#CCAA00");
+            }
+
+            foreach (var item in bonus)
+            {
+                AddLine($"[Bonus Find] {item.WeaponName} ({item.HardpointSize}) — ${item.SalvageValue:N0} — lucky find from {item.SourceFrame}",
+                    "#00CCFF");
+            }
+
+            int totalItems = scavenged.Count + bonus.Count;
+            int totalValue = scavenged.Sum(s => s.SalvageValue) + bonus.Sum(b => b.SalvageValue);
+            AddLine("", "#000000");
+            AddLine($"Total recovered: {totalItems} item(s) (${totalValue:N0} value)", "#FFCC00", 10, true);
+        }
+
+        ContinueButton.Content = "CONFIRM & EXIT";
     }
 }

@@ -65,9 +65,9 @@ MechanizedArmourCommander/
 ### Company Management (HQ)
 - **Roster**: View owned frames with status, assigned pilot, loadout, repair/sell/rename
 - **Pilots**: Hire, assign, and track pilot stats (Gunnery, Piloting, Tactics)
-- **Market**: Faction-filtered marketplace with standing-based discounts and exclusive items
+- **Market**: Persistent per-planet stock (refreshes weekly), roll-based availability weighted by faction standing — small weapons always available, heavy/assault chassis rare, standing-based discounts and exclusive items
 - **Inventory**: Company weapon and equipment storage — buy, sell, salvage flows through here
-- **Refit Bay**: Visual mech diagram with click-to-equip weapons and equipment, staged changes with running cost display, confirm/reset
+- **Refit Bay**: Visual mech diagram with click-to-equip weapons and equipment, weapon group management (◄/► cycling with reactor budget display), staged changes with running cost display, confirm/reset
 - **Galaxy**: Star map with 11 systems, travel between planets and jump between systems, buy fuel, faction territory overview
 - **Missions**: Browse 3 location-based contracts biased to current system's controlling faction
 - **Deploy**: Select 1-4 frames with pilots for mission deployment
@@ -84,7 +84,7 @@ MechanizedArmourCommander/
 - **Head Destruction**: Cockpit breach triggers pilot survival roll (50% + Piloting skill) — survive with heavy penalties or pilot KIA and frame shuts down
 - **Layered Damage**: 7 hit locations with Armor → Structure → Component damage cascade, Reactive Armor reduces structure damage
 - **Reactor Energy**: Manage energy budget each turn — Cooling Vents boost output, overloading risks shutdown
-- **Weapon Groups**: Assign weapons to groups, fire as single actions
+- **Weapon Groups**: Assign weapons to groups (1–4) via Refit Bay, fire as single actions — reactor budget panel shows per-group energy/damage with over-budget warnings, group reassignment is free
 - **Line of Sight**: Intervening terrain (Forest -5%/hex, Rocks -3%/hex) penalizes shots fired through blocking hexes
 - **Target Cursor**: Hover over enemies when targeting to see LOS line, intervening terrain penalties, and full hit chance breakdown
 - **AI Opponents**: Hex pathfinding with Aggressive/Balanced/Defensive stances and optimal distance targeting
@@ -93,6 +93,7 @@ MechanizedArmourCommander/
 ### Post-Combat
 - Victory/Defeat/Withdrawal outcomes with financial report
 - Interactive salvage selection from destroyed enemy wreckage (with item values displayed)
+- **Frame salvage from head kills** — purchase structurally intact enemy frames at 40% price with combat damage applied
 - Faction standing changes based on mission outcome
 - Pilot XP gain, injury tracking, KIA
 - Per-frame damage reports with repair costs
@@ -158,14 +159,19 @@ See [LORE.md](LORE.md) for the full backstory covering:
 
 ## Game Rules
 
-See [CORE_RULES.md](CORE_RULES.md) for the complete authoritative rules reference covering:
-- Combat round structure and end conditions
-- Accuracy formula with all modifiers
-- Damage resolution and component damage
-- Reactor energy and shutdown mechanics
-- Loadout, hardpoints, equipment, and space budget
-- Chassis class stats and pilot skills
-- AI behavior and economy rules
+See [CORE_RULES.md](CORE_RULES.md) for the complete authoritative rules reference (17 sections, tabletop-ready). Covers:
+- Combat round structure, action economy, and end conditions
+- Full accuracy formula with all modifiers (d100 roll-under)
+- Damage resolution, hit locations, component damage, and damage transfer
+- Reactor energy, overloading, and shutdown mechanics
+- Complete weapon reference (16 weapons with full stat blocks)
+- All 12 chassis stat blocks with structure values per location
+- Equipment system (12 items across 3 categories)
+- Faction standing system (5 tiers, standing change formulas)
+- Mission generation (enemy composition, difficulty scaling, reward tables)
+- Economy (upkeep, deployment costs, repair, market stock, salvage allowance)
+- Galaxy travel and location-based contracts
+- Tabletop quick reference (dice, turn sequence, attack resolution, economy cheat sheet)
 
 ## Development Status
 
@@ -186,6 +192,10 @@ See [CORE_RULES.md](CORE_RULES.md) for the complete authoritative rules referenc
 - Galaxy travel: 11 star systems, 25+ planets/stations, 16 jump routes, fuel economy, location-based contracts
 - Visual galaxy map with faction-colored star systems, jump route connections, and interactive travel
 - Audio system: 9 sound effects (UI clicks, combat sounds, outcome stings) across all windows
+- Weapon group management in Refit Bay with reactor budget display and free group reassignment
+- Persistent market stock system with roll-based availability weighted by faction standing (weekly refresh per planet)
+- Frame salvage from head kills — purchase enemy frames at 40% cost with combat damage applied
+- Tabletop-ready CORE_RULES.md (17 sections) with complete weapon/chassis stat blocks, faction standing, mission generation, and quick reference
 - Frame renaming from roster UI
 - Salvage value display on post-combat loot screen
 - Repair time system (repairs take days, rush option at 2x cost)
@@ -239,4 +249,4 @@ For licensing inquiries or permission requests, please contact the repository ow
 
 ---
 
-*Last Updated: 2026-02-13*
+*Last Updated: 2026-02-16*

@@ -27,6 +27,9 @@ public class Mission
     // Map size based on difficulty
     public MapSize MapSize { get; set; } = MapSize.Medium;
 
+    // Payout slider: 0=Full Pay, 1=Mostly Pay, 2=Balanced, 3=Mostly Salvage, 4=Full Salvage
+    public int PayoutLevel { get; set; } = 2;
+
     // Landscape determines terrain generation (from planet type)
     public string Landscape { get; set; } = "Habitable"; // "Habitable" | "Industrial" | "Mining" | "Station" | "Outpost"
 }

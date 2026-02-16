@@ -21,6 +21,7 @@ public partial class ManagementWindow : Window
     private Mission? _selectedMission;
     private HashSet<int> _selectedDeployFrames = new();
     private int? _marketFactionId = null;
+    private int _payoutLevel = 2; // 0=Full Pay, 1=Mostly Pay, 2=Balanced, 3=Mostly Salvage, 4=Full Salvage
 
     public bool LaunchCombat { get; private set; }
     public bool ReturnToMainMenu { get; private set; }
@@ -48,7 +49,7 @@ public partial class ManagementWindow : Window
         if (state == null) return;
 
         CompanyNameText.Text = state.CompanyName;
-        DayText.Text = $"Day {state.CurrentDay}";
+        DayText.Text = _management.GetCalendarDate(state.CurrentDay);
         CreditsText.Text = $"${state.Credits:N0}";
         int upkeep = _management.GetDailyUpkeep();
         ReputationText.Text = $"Rep: {state.Reputation}  |  Upkeep: ${upkeep:N0}/day  |  Fuel: {state.Fuel}/{GalaxyService.MaxFuel}";
@@ -513,6 +514,15 @@ public partial class ManagementWindow : Window
         var state = _management.GetPlayerState();
         float priceModifier = 1.0f;
 
+        // Get current location context for stock generation
+        var currentSystem = _galaxyService.GetCurrentSystem();
+        var currentPlanet = _galaxyService.GetCurrentPlanet();
+        int? controllingFactionId = currentSystem?.ControllingFactionId;
+
+        // Generate or fetch persistent market stock for this planet
+        var stock = _management.GetOrGenerateMarketStock(
+            currentPlanet?.PlanetId ?? 1, controllingFactionId);
+
         // Faction filter buttons
         var filterPanel = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
 
@@ -556,23 +566,29 @@ public partial class ManagementWindow : Window
                     ? $"Standing: {selectedStanding.StandingLevel} ({selectedStanding.Standing}) — {discount:F0}% discount"
                     : $"Standing: {selectedStanding.StandingLevel} ({selectedStanding.Standing})";
                 AddInfoLine(discountText, selectedFaction.Color);
-                AddInfoLine("", "#000000");
             }
         }
 
-        // Get filtered items
-        List<Chassis> allChassis;
-        List<Weapon> allWeapons;
+        // Stock refresh info
+        if (stock.GeneratedOnDay > 0 && state != null)
+        {
+            int daysUntilRefresh = stock.ExpiresOnDay - state.CurrentDay;
+            string refreshText = daysUntilRefresh > 0
+                ? $"Stock restocks in {daysUntilRefresh} day{(daysUntilRefresh != 1 ? "s" : "")}"
+                : "Stock is refreshing...";
+            AddInfoLine(refreshText, "#555555");
+        }
+        AddInfoLine("", "#000000");
 
+        // Filter stock by selected faction
+        var chassisStock = stock.Chassis.AsEnumerable();
+        var weaponStock = stock.Weapons.AsEnumerable();
         if (_marketFactionId.HasValue)
         {
-            allChassis = _management.GetFactionMarketChassis(_marketFactionId.Value);
-            allWeapons = _management.GetFactionMarketWeapons(_marketFactionId.Value);
-        }
-        else
-        {
-            allChassis = _management.GetAllChassis();
-            allWeapons = _management.GetAllWeapons();
+            chassisStock = chassisStock.Where(c =>
+                c.Chassis.FactionId == null || c.Chassis.FactionId == _marketFactionId.Value);
+            weaponStock = weaponStock.Where(w =>
+                w.Weapon.FactionId == null || w.Weapon.FactionId == _marketFactionId.Value);
         }
 
         // === Chassis Section ===
@@ -581,12 +597,12 @@ public partial class ManagementWindow : Window
 
         foreach (var chassisClass in new[] { "Light", "Medium", "Heavy", "Assault" })
         {
-            var classItems = allChassis.Where(c => c.Class == chassisClass).ToList();
-            if (!classItems.Any()) continue;
+            var classItems = chassisStock.Where(c => c.Chassis.Class == chassisClass).ToList();
+            if (classItems.Count == 0) continue;
 
             AddInfoLine($"--- {chassisClass.ToUpper()} ---", "#005500");
 
-            foreach (var chassis in classItems)
+            foreach (var (chassis, qty, stockId) in classItems)
             {
                 int basePrice = ManagementService.GetChassisPrice(chassis);
                 int price = (int)(basePrice * priceModifier);
@@ -603,7 +619,7 @@ public partial class ManagementWindow : Window
 
                 var content = new StackPanel();
                 content.Children.Add(MakeText(
-                    $"{chassis.Designation} {chassis.Name}",
+                    $"{chassis.Designation} {chassis.Name}  [Qty: {qty}]",
                     "#00FF00", 11, true));
                 content.Children.Add(MakeText(
                     $"HP: {chassis.HardpointSmall}S/{chassis.HardpointMedium}M/{chassis.HardpointLarge}L  " +
@@ -619,10 +635,10 @@ public partial class ManagementWindow : Window
                     canAfford ? "#003300" : "#1A0000",
                     canAfford ? "#00FF00" : "#663333",
                     canAfford ? "#006600" : "#330000");
-                buyBtn.Tag = new int[] { chassis.ChassisId, (int)(priceModifier * 100) };
+                buyBtn.Tag = new int[] { chassis.ChassisId, (int)(priceModifier * 100), stockId };
                 buyBtn.IsEnabled = canAfford;
                 buyBtn.Click += PurchaseChassis_Click;
-                buyBtn.Width = 240;
+                buyBtn.Width = 260;
                 buyBtn.Margin = new Thickness(0, 4, 0, 0);
                 content.Children.Add(buyBtn);
 
@@ -639,12 +655,12 @@ public partial class ManagementWindow : Window
 
         foreach (var size in new[] { "Small", "Medium", "Large" })
         {
-            var sizeItems = allWeapons.Where(w => w.HardpointSize == size).ToList();
-            if (!sizeItems.Any()) continue;
+            var sizeItems = weaponStock.Where(w => w.Weapon.HardpointSize == size).ToList();
+            if (sizeItems.Count == 0) continue;
 
             AddInfoLine($"--- {size.ToUpper()} HARDPOINT ---", "#005500");
 
-            foreach (var weapon in sizeItems)
+            foreach (var (weapon, qty, stockId) in sizeItems)
             {
                 // Check exclusive access
                 FactionStanding? weaponStanding = null;
@@ -667,7 +683,9 @@ public partial class ManagementWindow : Window
                 };
 
                 var content = new StackPanel();
-                string nameLabel = isLocked ? $"{weapon.Name} [LOCKED — Allied required]" : weapon.Name;
+                string nameLabel = isLocked
+                    ? $"{weapon.Name} [LOCKED — Allied required]"
+                    : $"{weapon.Name}  [Qty: {qty}]";
                 content.Children.Add(MakeText(nameLabel, isLocked ? "#663333" : "#00FF00", 11, true));
                 content.Children.Add(MakeText(
                     $"Type: {weapon.WeaponType}  Dmg: {weapon.Damage}  Energy: {weapon.EnergyCost}  " +
@@ -687,7 +705,7 @@ public partial class ManagementWindow : Window
                         canAfford ? "#003300" : "#1A0000",
                         canAfford ? "#00FF00" : "#663333",
                         canAfford ? "#006600" : "#330000");
-                    buyBtn.Tag = new int[] { weapon.WeaponId, (int)(priceModifier * 100) };
+                    buyBtn.Tag = new int[] { weapon.WeaponId, (int)(priceModifier * 100), stockId };
                     buyBtn.IsEnabled = canAfford;
                     buyBtn.Click += PurchaseWeapon_Click;
                     buyBtn.Width = 220;
@@ -706,16 +724,14 @@ public partial class ManagementWindow : Window
         AddInfoLine("Purchased equipment is added to company INVENTORY.", "#004488");
         AddInfoLine("", "#000000");
 
-        var allEquipment = _management.GetAllEquipment();
-
         foreach (var category in new[] { "Passive", "Active", "Slot" })
         {
-            var catItems = allEquipment.Where(e => e.Category == category).ToList();
-            if (!catItems.Any()) continue;
+            var catItems = stock.Equipment.Where(e => e.Equipment.Category == category).ToList();
+            if (catItems.Count == 0) continue;
 
             AddInfoLine($"--- {category.ToUpper()} ---", "#004488");
 
-            foreach (var eq in catItems)
+            foreach (var (eq, qty, stockId) in catItems)
             {
                 int eqPrice = eq.PurchaseCost;
                 bool canAffordEq = state != null && state.Credits >= eqPrice;
@@ -731,7 +747,7 @@ public partial class ManagementWindow : Window
 
                 var eqContent = new StackPanel();
                 string sizeTag = eq.HardpointSize != null ? $" [{eq.HardpointSize[0]}]" : "";
-                eqContent.Children.Add(MakeText($"{eq.Name}{sizeTag}", "#5599DD", 11, true));
+                eqContent.Children.Add(MakeText($"{eq.Name}{sizeTag}  [Qty: {qty}]", "#5599DD", 11, true));
                 eqContent.Children.Add(MakeText(
                     $"Space: {eq.SpaceCost}  Energy: {eq.EnergyCost}  |  {eq.Description ?? eq.Effect}",
                     "#4488BB", 10));
@@ -740,7 +756,7 @@ public partial class ManagementWindow : Window
                     canAffordEq ? "#002244" : "#1A0000",
                     canAffordEq ? "#5599DD" : "#663333",
                     canAffordEq ? "#004488" : "#330000");
-                eqBuyBtn.Tag = eq.EquipmentId;
+                eqBuyBtn.Tag = new int[] { eq.EquipmentId, stockId };
                 eqBuyBtn.IsEnabled = canAffordEq;
                 eqBuyBtn.Click += PurchaseEquipment_Click;
                 eqBuyBtn.Width = 180;
@@ -768,11 +784,12 @@ public partial class ManagementWindow : Window
         {
             int chassisId = data[0];
             float modifier = data[1] / 100f;
+            int? stockId = data.Length > 2 ? data[2] : null;
 
             var roster = _management.GetRoster();
             string name = $"Frame-{roster.Count + 1}";
 
-            if (_management.PurchaseChassis(chassisId, name, modifier))
+            if (_management.PurchaseChassis(chassisId, name, modifier, stockId))
             {
                 RefreshStatusBar();
                 ShowSection("Market");
@@ -786,8 +803,9 @@ public partial class ManagementWindow : Window
         {
             int weaponId = data[0];
             float modifier = data[1] / 100f;
+            int? stockId = data.Length > 2 ? data[2] : null;
 
-            if (_management.PurchaseWeapon(weaponId, modifier))
+            if (_management.PurchaseWeapon(weaponId, modifier, stockId))
             {
                 RefreshStatusBar();
                 ShowSection("Market");
@@ -797,9 +815,12 @@ public partial class ManagementWindow : Window
 
     private void PurchaseEquipment_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is Button btn && btn.Tag is int equipmentId)
+        if (sender is Button btn && btn.Tag is int[] data)
         {
-            if (_management.PurchaseEquipment(equipmentId))
+            int equipmentId = data[0];
+            int? stockId = data.Length > 1 ? data[1] : null;
+
+            if (_management.PurchaseEquipment(equipmentId, 1.0f, stockId))
             {
                 RefreshStatusBar();
                 ShowSection("Market");
@@ -1672,6 +1693,7 @@ public partial class ManagementWindow : Window
         {
             _selectedMission = _availableMissions.FirstOrDefault(m => m.MissionId == missionId);
             _selectedDeployFrames.Clear();
+            _payoutLevel = 2; // Reset to Balanced
             ShowSection("Deploy");
         }
     }
@@ -1697,6 +1719,47 @@ public partial class ManagementWindow : Window
             _selectedMission.EnemyComposition.Select(e => $"{e.Count}x {e.ChassisClass}"));
         AddInfoLine($"Enemy Force ({_selectedMission.OpponentFactionName}): {enemies}", _selectedMission.OpponentFactionColor);
         AddInfoLine("", "#000000");
+
+        // Payout slider
+        AddInfoLine("CONTRACT TERMS:", "#FFCC00");
+        var sliderPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 4) };
+        string[] payoutLabels = { "FULL PAY", "MOSTLY PAY", "BALANCED", "MOSTLY SALVAGE", "FULL SALVAGE" };
+        string[] payoutCredits = { "100%", "85%", "70%", "50%", "25%" };
+        string[] payoutSalvage = { "0x", "0.5x", "1x", "1.5x", "2x" };
+        for (int i = 0; i < 5; i++)
+        {
+            bool isSelected = _payoutLevel == i;
+            var btn = new Button
+            {
+                Content = $"{payoutLabels[i]}\n${payoutCredits[i]} / {payoutSalvage[i]}",
+                Tag = i,
+                Style = null,
+                Width = 110,
+                Height = 40,
+                Margin = new Thickness(0, 0, 4, 0),
+                Padding = new Thickness(4, 2, 4, 2),
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 8,
+                FontWeight = FontWeights.Bold,
+                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(isSelected ? "#1A1A00" : "#0A0A0A")),
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(isSelected ? "#FFCC00" : "#666666")),
+                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(isSelected ? "#FFAA00" : "#333333")),
+                BorderThickness = new Thickness(isSelected ? 2 : 1)
+            };
+            btn.Click += PayoutLevel_Click;
+            sliderPanel.Children.Add(btn);
+        }
+        ContentPanel.Children.Add(sliderPanel);
+
+        // Show payout preview
+        float creditMod = _payoutLevel switch { 0 => 1.00f, 1 => 0.85f, 2 => 0.70f, 3 => 0.50f, 4 => 0.25f, _ => 0.70f };
+        float salvageMod = _payoutLevel switch { 0 => 0.0f, 1 => 0.5f, 2 => 1.0f, 3 => 1.5f, 4 => 2.0f, _ => 1.0f };
+        int previewCredits = (int)(_selectedMission.CreditReward * creditMod);
+        int baseSalvage = 1 + _selectedMission.Difficulty / 2;
+        int previewSalvage = (int)Math.Ceiling(baseSalvage * salvageMod);
+        AddInfoLine($"Credits: ${previewCredits:N0}  |  Salvage Picks: {previewSalvage}  |  Scavenge rolls on remaining loot", "#FFAA00");
+        AddInfoLine("", "#000000");
+
         AddInfoLine("Select 1-4 frames to deploy (must have pilots and be Ready):", "#00AA00");
         AddInfoLine("", "#000000");
 
@@ -1787,9 +1850,19 @@ public partial class ManagementWindow : Window
         }
     }
 
+    private void PayoutLevel_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.Tag is int level)
+        {
+            _payoutLevel = level;
+            ShowSection("Deploy");
+        }
+    }
+
     private void DeployLance_Click(object sender, RoutedEventArgs e)
     {
         if (_selectedMission == null || _selectedDeployFrames.Count == 0) return;
+        _selectedMission.PayoutLevel = _payoutLevel;
 
         if (!_management.DeductDeploymentCost(_selectedDeployFrames))
         {

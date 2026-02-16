@@ -6,6 +6,7 @@ namespace MechanizedArmourCommander.Core.Models;
 public class CombatFrame
 {
     public int InstanceId { get; set; }
+    public int ChassisId { get; set; }
     public string CustomName { get; set; } = string.Empty;
     public string ChassisDesignation { get; set; } = string.Empty;
     public string ChassisName { get; set; } = string.Empty;
